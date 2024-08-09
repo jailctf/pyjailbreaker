@@ -16,7 +16,7 @@ def <gadget function name>__<variant name>(<param1>, ..., *, <required gadget fu
 
 Raw gadgets, such a pickle and bytecode gadgets, is of a slightly different format - the code of the gadget is responsible for creating the part of raw bytes that the gadget is responsible. Thus, its return value should be bytes, and the whole gadget chain will be run to obtain the full payload instead of returning the full code of the chain like a python gadget chain would have.
 
-If a gadget requires a functionality from another gadget, it should put the required gadget function name in the kwargs of the function parameter list, and then call the function in the gadget code to obtain the value.
+If a gadget requires a functionality from another gadget, it should put the required gadget function name in the kwargs of the function parameter list. If the gadget requires no params, it is simply usable as a variable. otherwise, call the gadget with the required params for the return value.
 
 
 The following resolution flow will be run for the required gadgets:
@@ -50,7 +50,9 @@ jailbreak.config(
     provided=["<gadget name>", ...],        # list of gadgets that is already provided, including any names of builtins already provided.
 )
 
-chain = jailbreak.<gadget function name>  #returns a string object representing the code generated, or throws an error with the closest string object (closest == least restriction violations)
+#returns a string object representing the code generated, or throws an error with the closest string object (closest == least restriction violations)
+#params (can be empty) are for the last gadget in the gadget chain (aka the one requested by the user), and are python code in string form for flexibility
+chain = jailbreak.<gadget function name>(<param1>, ...)  
 ```
 
 The restrictions only adds up at the moment - all of the criteria has to be met for the gadget to be deemed usable.

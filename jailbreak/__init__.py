@@ -58,44 +58,58 @@ def _count_violations(func, required_gadgets) -> int:
     #handle automatic information
     checks['ast'] = {type(n) for n in all_nodes}
     checks['char'] = {c for n in all_nodes if hasattr(n, 'first_token') for tok in ast_tree.token_range(n.first_token, n.last_token) for c in tok.string}
+    #TODO also make a substring check instead of just char
 
-    violations = {}
+    violations = set()
     for field, restrictions in _set_config['restrictions'].items():
-        violations += set(restrictions).intersection(set(checks[field]))
+        violations |= set(restrictions).intersection(set(checks[field]))
 
     return violations
 
 
-def _try_gadget(name: str, all_gadgets: dict, seen: list) -> str:
+def _try_gadget(name: str, all_gadgets: dict, seen: list):
     #terminate if provided
     if name in _set_config['provided']:
-        return f'#def {name}(*args, **kwargs): pass  #TODO provided'
+        return (f'#def {name}(*args, **kwargs): pass  #TODO provided\n\n', lambda: ...)  #any empty func would work
 
     for gadget, func in all_gadgets.items():
         if gadget in seen:
             continue
 
         if gadget.startswith(name):
-            fullargspec = inspect.getfullargspec(func)
+            #print('trying', gadget)
 
-            func_src_user = inspect.getsource(func).splitlines()
-            func_src_user[0] = f'def {name}({", ".join(fullargspec.args)}):'   #replace the header to exclude gadget use
-            func_src_user = '\n'.join(func_src_user) + '\n\n'
-            
+            fullargspec = inspect.getfullargspec(func)
             required_gadgets = fullargspec.kwonlyargs
             violations = _count_violations(func, required_gadgets)
             if not violations:
+                func_src_user = inspect.getsource(func).splitlines()
+                func_src_user[0] = f'def {gadget}({", ".join(fullargspec.args)}):'   #replace the header to exclude gadget use
+                func_src_user = '\n'.join(func_src_user) + '\n'
+                func_src_user += f'{name} = {gadget}'  #tell the user we are using this specific gadget for the gadget they want
+                if not fullargspec.args:
+                    func_src_user += '()'  #call the gadget to convert it to an attr access
+                func_src_user += '\n\n'
+
+            
                 if not required_gadgets:   #no more to chain, return (base case)
-                    return func_src_user
+                    return (func_src_user, func)
                 
+                good = True
                 for next_gadget in required_gadgets:
-                    next_src = _try_gadget(next_gadget, all_gadgets, seen + [gadget])
-                    #found a good chain
-                    if next_src:
-                        func_src_user += next_src
-                        return func_src_user
+                    next_src, _ = _try_gadget(next_gadget, all_gadgets, seen + [gadget])
+
+                    #(at least) one of the required gadgets does not have a valid chain, drop out
+                    if not next_src:
+                        good = False
+                        break
+                    
+                    func_src_user = next_src + func_src_user  #so the order is more human readable (earlier gadgets are at the top)
+                
+                if good:
+                    return (func_src_user, func)  #generated code so far, current gadget func
     
-    return None #could be due to a gadget requiring an unknown gadget
+    return (None, None) #could be due to a gadget requiring an unknown gadget
 
 
 
@@ -134,11 +148,20 @@ def __getattr__(name):
                         if attrname.startswith(filename):
                             all_gadgets[attrname] = getattr(gadget_module, attrname)
 
-        #print(all_gadgets)
-
         if gadget_type == 'python':  #returning just the string for python based chain is good
-            chain = _try_gadget(name, all_gadgets, [])
-            return chain + f'\n\n{name}()'
+            chain, gadget_func = _try_gadget(name, all_gadgets, [])
+            
+            if not chain: return None
+
+            params = inspect.getfullargspec(gadget_func).args
+            def param_wrapper(*args):
+                nonlocal chain
+                chain += f'{name}'
+                if params: 
+                    chain += f'({", ".join(args)})'
+                return chain + '\n'
+
+            return param_wrapper
         else:
             return exec(chain) #apply restrictions and obtain bytes; works fairly differently from python gadget chains
     except Exception as e:

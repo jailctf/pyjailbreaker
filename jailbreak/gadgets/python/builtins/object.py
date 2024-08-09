@@ -10,4 +10,4 @@ def object__type_mro(*, type):
 #unlikely that tuple would be unavailable specifically in scenarios where we can use __base__ anyway,
 #no need for other base types hopefully
 def object__tuple_base():
-    return ().__base__
+    return ().__class__.__base__
