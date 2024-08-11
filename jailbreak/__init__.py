@@ -6,15 +6,21 @@ _registered_converters = {n: [] for a in _ast.AST.__subclasses__() for n in a.__
 _applicable_converters = {}
 
 _set_config = {'restrictions': {}, 'provided': []}
+_user_gadgets = {}
 
 
 def config(**kwargs):
     global _set_config
 
     #put provided in another field since it is not a restriction
-    _set_config['provided'] = kwargs.pop('provided')
+    _set_config['provided'] = kwargs.pop('provided', [])
 
     _set_config['restrictions'] = kwargs
+
+
+#for adding custom gadgets by the user
+def register_user_gadget(func):
+    _user_gadgets[func.__name__] = func
 
 
 #for use as decorator on converters
@@ -232,7 +238,7 @@ def __getattr__(name):
         if gadget_type == None: raise NameError(f'gadget {name} not found!')
         
         #recursively obtain all gadgets of the same type
-        all_gadgets = {}
+        all_gadgets = dict(_user_gadgets)  #add the user gadgets into the available gadgets list
         for path, _, filenames in _os.walk(gadgets_path + _os.sep + gadget_type):
             for f in filenames:
                 filename, ext = _os.path.splitext(f)

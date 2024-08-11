@@ -65,3 +65,5 @@ The restrictions only adds up at the moment - all of the criteria has to be met 
 
 
 Outside of the exploit chain generator, if a specific gadget is required either for manual chain creation, inspection, or testing, `from jailbreak.gadgets.<subdirs> import <gadget full name>` could be used instead.
+
+A user is also able to provide their own gadgets through providing their own python function that confirms to the gadget spec via `jailbreak.register_user_gadget(<gadget function object>)`.

