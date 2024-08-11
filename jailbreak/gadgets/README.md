@@ -14,6 +14,11 @@ def <gadget function name>__<variant name>(<param1>, ..., *, <required gadget fu
     return <any value that it has to return, or None>
 ```
 
+Currently, the gadget code has to be formatted in a very specific way for the gadget rewrites to work:
+- the function definition must be on a single line
+- the lines of code must be indented using 4-spaces
+This is chosen to avoid too much rewriting on the gadget codes themselves to preserve their properties (e.g. characters used). Better schemes of rewriting will be investigated in the future.
+
 Raw gadgets, such a pickle and bytecode gadgets, is of a slightly different format - the code of the gadget is responsible for creating the part of raw bytes that the gadget is responsible. Thus, its return value should be bytes, and the whole gadget chain will be run to obtain the full payload instead of returning the full code of the chain like a python gadget chain would have.
 
 If a gadget requires a functionality from another gadget, it should put the required gadget function name in the kwargs of the function parameter list. If the gadget requires no params, it is simply usable as a variable. otherwise, call the gadget with the required params for the return value.
@@ -52,6 +57,7 @@ jailbreak.config(
 
 #returns a string object representing the code generated, or throws an error with the closest string object (closest == least restriction violations)
 #params (can be empty) are for the last gadget in the gadget chain (aka the one requested by the user), and are python code in string form for flexibility
+#NOTE: all params passed are unverified since it is direct user given code and is deemed usable out of the box
 chain = jailbreak.<gadget function name>(<param1>, ...)  
 ```
 
