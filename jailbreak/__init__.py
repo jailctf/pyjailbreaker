@@ -6,8 +6,7 @@ _registered_converters = {n: [] for a in _ast.AST.__subclasses__() for n in a.__
 _applicable_converters = {}
 
 _set_config = {'restrictions': {}, 'provided': []}
-_user_gadgets = {}
-
+_user_gadgets = {dirname: {} for dirname in next(_os.walk(__path__[0] + '/gadgets'))[1] if dirname != '__pycache__'}  #prepopulate gadget types from subdirs in gadgets
 
 def config(**kwargs):
     global _set_config
@@ -19,8 +18,11 @@ def config(**kwargs):
 
 
 #for adding custom gadgets by the user
-def register_user_gadget(func):
-    _user_gadgets[func.__name__] = func
+def register_user_gadget(func, gadget_type):
+    if gadget_type in _user_gadgets:
+        _user_gadgets[gadget_type][func.__name__] = func
+    else:
+        raise NameError(f"gadget type {gadget_type} does not exist!")
 
 
 #for use as decorator on converters
@@ -224,21 +226,28 @@ def __getattr__(name):
     try:
         #enable from jailbreak import * syntax
         if name == '__all__':
-            return ['config', 'register_converter', 'converters', 'utils', 'gadgets']
+            return ['config', 'register_converter', 'register_user_gadget', 'converters', 'utils', 'gadgets']
 
         gadgets_path = gadgets.__path__[0]
 
         gadget_type = None
-        for path, _, filenames in _os.walk(gadgets_path):
-            for f in filenames:
-                if f.lower() == name + '.py':
-                    gadget_type = _os.path.relpath(path, gadgets_path).split(_os.sep)[0]
-                    break
+        #check user gadgets first
+        for gt, user_gadgets in _user_gadgets.items():
+            if name in [n.split('__')[0] for n in user_gadgets]:
+                gadget_type = gt
+
+        if not gadget_type:
+            #check repo gadgets
+            for path, _, filenames in _os.walk(gadgets_path):
+                for f in filenames:
+                    if f.lower() == name + '.py':
+                        gadget_type = _os.path.relpath(path, gadgets_path).split(_os.sep)[0]
+                        break
 
         if gadget_type == None: raise NameError(f'gadget {name} not found!')
         
         #recursively obtain all gadgets of the same type
-        all_gadgets = dict(_user_gadgets)  #add the user gadgets into the available gadgets list
+        all_gadgets = dict(_user_gadgets[gadget_type])  #add the user gadgets into the available gadgets list
         for path, _, filenames in _os.walk(gadgets_path + _os.sep + gadget_type):
             for f in filenames:
                 filename, ext = _os.path.splitext(f)
