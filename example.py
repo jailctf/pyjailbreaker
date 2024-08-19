@@ -59,3 +59,41 @@ jailbreak.register_user_gadget(ls__user, 'python')
 payload = jailbreak.ls()  #ls does not exist in repo gadgets, but is provided by user
 print(payload)
 
+print("\n---------\n")
+
+#inliner tests
+def range__user(*, builtins_dict):
+    return builtins_dict['range']
+
+#calls inside nested scopes (get_shell), with calls outside of the inner scope but inside the same ast node (range)
+def test_nested_noargs__user(*, range, get_shell):
+    get_shell('outside')
+    for i in range(100):
+        get_shell('inside')
+
+#same as above, except inliner is called on the calls outside of the inner scope
+def test_nested_args__user(*, chr, get_shell):
+    for i in chr(0x20) + chr(0x21):
+        get_shell('inside')
+
+#orelse/finally block test
+def test_other_stmt_blocks__user(*, get_shell):
+    try:
+        get_shell('try')
+    except:
+        get_shell('except')
+    #else is intentionally missed to test if it breaks on empty statement blocks; the same code is used for all statement blocks anyway
+    finally:
+        get_shell('finally')
+
+jailbreak.config(inline=True)
+jailbreak.register_user_gadget(range__user, 'python')
+jailbreak.register_user_gadget(test_nested_noargs__user, 'python')
+jailbreak.register_user_gadget(test_nested_args__user, 'python')
+jailbreak.register_user_gadget(test_other_stmt_blocks__user, 'python')
+payload = jailbreak.test_nested_noargs()
+print(payload + '\n')
+payload = jailbreak.test_nested_args()
+print(payload + '\n')
+payload = jailbreak.test_other_stmt_blocks()
+print(payload)

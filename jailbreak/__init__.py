@@ -60,7 +60,8 @@ class ApplyConverter(_ast.NodeTransformer):
         #otherwise return itself
         return super().generic_visit(node)
 
-def _convert_return_to_assign(func_ast, name):
+#attr decides which block of statements in func_ast we are currently operating on
+def _convert_return_to_assign(func_ast, name, attr='body'):
     #there might be arbitrary depth module containers, so use a transformer here too
     #NOTE even though this function supports arbitrary depth rewrites its not recommended to have module containers since it might have side effects as theyre passed by reference
     #NOTE e.g. when Inliner uses the same gadget_ast.body for calling this, even though the list is different after shallow copy if there are Module nodes then they will be the same reference and thus rewriting one return will show up in another
@@ -74,14 +75,14 @@ def _convert_return_to_assign(func_ast, name):
 
     if not visited:
         #no returns, add a none so the name at least resolves
-        func_ast.body.append(_ast.Assign([_ast.Name(name)], _ast.Name('None')))
+        getattr(func_ast, attr).append(_ast.Assign([_ast.Name(name)], _ast.Name('None')))
     return _ast.fix_missing_locations(func_ast)
 
 #convert all calls into inlined code
 #ast walker for applying given converters
 #TODO check if theres ever any case where the dependent gadgets are not immediately used (i dont think so?)
 class Inliner(_ast.NodeTransformer):
-    def __init__(self, gadget_name, gadget_ast) -> None:
+    def __init__(self, gadget_name: str, gadget_ast: _ast.FunctionDef) -> None:
         super().__init__()
         self.gadget_name = gadget_name
 
@@ -113,51 +114,74 @@ class Inliner(_ast.NodeTransformer):
     """
     #TODO a better way to do this would be to figure out a statement -> expression converter and use it here instead of precomputing (but stmt -> expr is not always possible so)
     def generic_visit(self, node: _ast.AST):
-        #on every statement entry, figure out all the calls to tracked gadgets and precompute it before the statement
-        if isinstance(node, _ast.stmt):
-            calls = {}
+        def get_stmt_body_attrs(node):
+            return [attr for attr, data in vars(node).items() if isinstance(data, list) and len(data) > 0 and isinstance(data[0], _ast.stmt)]
+
+        #on every node entry (that has a body of statements), figure out all the calls IMMEDIATE TO THAT BODY OF STATEMENTS to tracked gadgets and precompute it before the statement
+        #so to ensure the scoping is at the correct level
+        #NOTE body of statements can be any of [body, orelse, finalbody] (so far <= 3.13) but just to be flexible make it dynamic (only continue if a list of statements is found)
+        stmt_body_attrs = get_stmt_body_attrs(node)
+        if stmt_body_attrs:
             gadget_name = self.gadget_name
 
             #nullify the function def if its tracked since it will be inlined
             if isinstance(node, _ast.FunctionDef):
-                if node.name == self.gadget_name:
+                if node.name == gadget_name:
                     return _ast.Module([], [])
 
             #obtain the calls (and rewrite it so that its referencing the precomputed variable instead) first
-            class CallRewrite(_ast.NodeTransformer):
-                def visit_Call(self, node: _ast.Call):
-                    nonlocal gadget_name, calls
-                    if isinstance(node.func, _ast.Name) and gadget_name.startswith(node.func.id):
-                        if node.func.id in calls:
-                            calls[node.func.id].append(node)
-                        else:
-                            calls[node.func.id] = [node]
-                        #use index as unique id
-                        node = _ast.fix_missing_locations(_ast.Name(f'{gadget_name}_{len(calls[node.func.id]) - 1}'))
-                    return super().generic_visit(node)
-            orig_code = CallRewrite().visit(node)
+            for attr in stmt_body_attrs:
+                calls = {}
+                class CallRewrite(_ast.NodeTransformer):
+                    def generic_visit(self, node: _ast.AST) -> _ast.AST:
+                        stmt_body_attrs = get_stmt_body_attrs(node)
+                        if stmt_body_attrs:
+                            #do NOT traverse deeper on body of statements, let the main Inliner visit it instead - but we still need to traverse non body statements
+                            #dynamically traverse all other expressions that are not body of statements, e.g. target / iter in for loops
+                            #NOTE each name in the grammar has a class that extends ast.AST, even if there isnt a proper node class for it (e.g. comprehension)
+                            #NOTE so the only thing we need to handle is the optional case (which is None on not exist) and the list case (which is a list of classes that extends ast.AST)
+                            for attr in set(dir(node)).difference(stmt_body_attrs):
+                                data = getattr(node, attr)
+                                if isinstance(data, list):
+                                    for i, element in enumerate(data):
+                                        if isinstance(data, _ast.AST):  #in theory if one element is a statement all should be
+                                            data[i] = self.generic_visit(element)
+                                elif isinstance(data, _ast.AST):
+                                    setattr(node, attr, self.generic_visit(data))
 
-            #Module is just a convenient container for a bunch of statements
-            new_statements = _ast.Module([], [])
+                            return node
+                        return super().generic_visit(node)
 
-            #precompute the calls before the statement actually runs
-            for gadget, nodes in calls.items():
-                #TODO check if clashes could ever get bad enough that while rewriting the current gadget (aka the current gadget is not tracked yet) there still are multiple gadgets
-                for i, n in enumerate(nodes):
-                    #rename references in the gadget code
-                    #XXX this assumes the call arg count is correct in the gadgets
-                    for j, arg in enumerate(n.args):
-                        internal_param_name = self.gadget_ast.args.args[j].arg
-                        #see NameRewrite above
-                        new_statements.body.append(_ast.Assign([_ast.Name(f'{gadget_name}_{internal_param_name}')], arg))
-                    #add the gadget code to run (after visitinge each node first)
-                    new_statements.body += [_ast.fix_missing_locations(self.generic_visit(stmt)) for stmt in self.gadget_ast.body]
-                    #assign the result
-                    new_statements = _convert_return_to_assign(new_statements, f'{gadget_name}_{i}')
+                    def visit_Call(self, node: _ast.Call):
+                        nonlocal gadget_name, calls
+                        if isinstance(node.func, _ast.Name) and gadget_name.startswith(node.func.id):
+                            if node.func.id in calls:
+                                calls[node.func.id].append(node)
+                            else:
+                                calls[node.func.id] = [node]
+                            #use index as unique id
+                            node = _ast.fix_missing_locations(_ast.Name(f'{gadget_name}_{len(calls[node.func.id]) - 1}'))
+                        return super().generic_visit(node)
+                orig_code = [CallRewrite().visit(stmt) for stmt in getattr(node, attr)]
 
-            new_statements.body.append(orig_code)
+                setattr(node, attr, [])   #clear out the original code, its rewritten in orig_code
+                #precompute the calls before the statement actually runs
+                for gadget, nodes in calls.items():
+                    for i, n in enumerate(nodes):
+                        #rename references in the gadget code
+                        #XXX this assumes the call arg count is correct in the gadgets
+                        for j, arg in enumerate(n.args):
+                            internal_param_name = self.gadget_ast.args.args[j].arg
+                            #see NameRewrite above
+                            getattr(node, attr).append(_ast.Assign([_ast.Name(f'{gadget_name}_{internal_param_name}')], arg))
+                        #add the gadget code to run (after visitinge each node first)
+                        getattr(node, attr).extend(self.gadget_ast.body)
+                        #assign the result
+                        node = _convert_return_to_assign(node, f'{gadget_name}_{i}', attr)
 
-            return _ast.fix_missing_locations(new_statements)  #no need to revisit new code anymore
+                getattr(node, attr).extend(orig_code)
+
+            node = _ast.fix_missing_locations(node)
         
         #otherwise return itself
         return super().generic_visit(node)
@@ -167,15 +191,10 @@ class Inliner(_ast.NodeTransformer):
 def _put_code_into_func_body(func_ast: _ast.Module, code_ast: _ast.Module):
     #only try inliner if the gadget we depend on requires arguments
     if _set_config['inline'] and isinstance(code_ast.body[0], _ast.FunctionDef) and code_ast.body[0].args:
-        #if the simple inliner for no args call ran on the current ast it will be a simple Assign node, so we can just prepend the code generated by inliner directly 
-        #otherwise write inside the func def to preserve the body[0] == FunctionDef assumption
-        node = func_ast.body[0] if isinstance(func_ast.body[0], _ast.FunctionDef) else func_ast
-
-        #remove the nested modules generated from inliner
-        orig_body = node.body
-        node.body = []
-        for mod in Inliner(code_ast.body[0].name, code_ast.body[0]).visit(_ast.Module(orig_body, [])).body:  #wrap the function body in a module instead since we will no longer need it
-            node.body += mod.body
+        # print(f'given\n{_ast.unparse(code_ast.body[0])}')
+        # print(f'orig\n{_ast.unparse(func_ast)}')
+        func_ast = Inliner(code_ast.body[0].name, code_ast.body[0]).visit(func_ast)
+        # print(f'rewritten\n{_ast.unparse(func_ast)}\n\n')
     else:            
         #add to the front of the func def, also to preserve the body[0] == FunctionDef assumption
         if isinstance(func_ast.body[0], _ast.FunctionDef):
