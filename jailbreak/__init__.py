@@ -61,12 +61,10 @@ class ApplyConverter(_ast.NodeTransformer):
 
 
 #required since there could be variable naming clashes that break a gadget if its not nested
-#XXX assumes func definition is at the top line and only consists of a single line
-#XXX assumes code are indented every 4 spaces
-def _put_code_into_func_body(func_src: str, code_src: str):
-    func_src = func_src.splitlines()
-    code_src = ['    ' + line for line in code_src.splitlines()]
-    return '\n'.join([func_src[0]] + code_src + func_src[1:]) + '\n'
+def _put_code_into_func_body(func_ast: _ast.Module, code_ast: _ast.Module):
+    #add to the front
+    func_ast.body[0].body = code_ast.body + func_ast.body[0].body
+    return _ast.fix_missing_locations(func_ast)
 
 
 def _exempt_node(node, required_gadgets, func_name):
@@ -84,25 +82,23 @@ def _exempt_node(node, required_gadgets, func_name):
 
     return False
         
-
-def _count_violations(func, required_gadgets, func_src=None) -> int:
+def _count_violations(func_ast: _ast.Module, required_gadgets) -> int:
+    #add token info
     import asttokens
+    tokens = asttokens.ASTTokens(_ast.unparse(func_ast), func_ast)
 
-    if not func_src:  #only getsource if we didnt provide it, since _ast rewritten funcs do not have getsource
-        func_src = _inspect.getsource(func)
-    ast_tree = asttokens.ASTTokens(func_src, parse=True)
-    all_nodes = [n for n in _ast.walk(ast_tree.tree) if not _exempt_node(n, required_gadgets, func.__name__)]
+    all_nodes = [n for n in _ast.walk(tokens.tree) if not _exempt_node(n, required_gadgets, func_ast.body[0].name)]
     
     #handle manual information
     checks = {}
-    if func.__doc__ != None:
-        for line in func.__doc__.splitlines():
+    if _ast.get_docstring(func_ast.body[0]) != None:
+        for line in _ast.get_docstring(func_ast.body[0]).__doc__.splitlines():
             field, val = line.strip().split(':', 1)
             checks[field] = _ast.literal_eval(val)
 
     #handle automatic information
     checks['ast'] = {type(n) for n in all_nodes}
-    checks['char'] = {c for n in all_nodes if hasattr(n, 'first_token') for tok in ast_tree.token_range(n.first_token, n.last_token) for c in tok.string}
+    checks['char'] = {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) for c in tok.string}
     #TODO also make a substring check instead of just char
 
     violations = set()
@@ -120,7 +116,7 @@ def _choose_converter_for_violation(violation, gadget: str, all_gadgets: dict, s
             if chain:
                 return (converter, chain)
                 
-def _try_convert(func_src_user: str, required_gadgets: list, violations: list, gadget: str, all_gadgets: dict, seen: list):
+def _try_convert(func_ast: _ast.Module, required_gadgets: list, violations: list, gadget: str, all_gadgets: dict, seen: list):
     #obtain a list of all converters that we should run to avoid the violations
     converters_to_run = set()
     generated_chains_for_converters = {}
@@ -136,19 +132,20 @@ def _try_convert(func_src_user: str, required_gadgets: list, violations: list, g
     #XXX situations where e.g. the strless converter uses chr(), which introduces CALLs and requires callless converter to run on it yet no CALLs were in the main gadget will just fail with this method
     #XXX but if we are lucky (eg main gadget has CALL violations so callless converter is in converters_to_run) then the conversion will pass
     for apply in _itertools.permutations(converters_to_run):
-        ast_tree = _ast.parse(func_src_user)
+        new_ast = func_ast
         #remove kwonlyargs from the function def coz its not actually part of the function
-        ast_tree.body[0].args.kwonlyargs = []
+        new_ast.body[0].args.kwonlyargs = []
+        new_ast.body[0].args.kw_defaults = []  #must match kwonlyargs
         for converter in apply:
-            ast_tree = ApplyConverter(converter).visit(ast_tree)
-        func_src_user = _ast.unparse(ast_tree) + '\n'
-        func = _FunctionType(compile(func_src_user, '<string>', 'exec').co_consts[0], globals())
+            new_ast = ApplyConverter(converter).visit(new_ast)
+        new_func = _FunctionType(compile(new_ast, '<string>', 'exec').co_consts[0], globals())
+        #TODO figure out if docstrings are preserved after rewrite, since count violations require it (if it does we need to remove it at the end)
         #XXX we are assuming converters do not introduce new regressions, otherwise we will have to rerun the whole conversion test again when we see violations
-        if not _count_violations(func, required_gadgets, func_src_user):
+        if not _count_violations(new_ast, required_gadgets):
             #add the required gadget chain(s) into the returned chain along with the transformed func
             for converter in apply:
-                func_src_user = _put_code_into_func_body(func_src_user, generated_chains_for_converters[converter])
-            return (func_src_user, func)
+                func_ast = _put_code_into_func_body(func_ast, generated_chains_for_converters[converter])
+            return (new_ast, new_func)
 
     #none of the applies worked, so give up
     return (None, None)
@@ -157,7 +154,9 @@ def _try_convert(func_src_user: str, required_gadgets: list, violations: list, g
 def _try_gadget(name: str, all_gadgets: dict, seen: list):
     #terminate if provided
     if name in _set_config['provided']:
-        return (f'#def {name}(*args, **kwargs): pass  #TODO provided\n\n', lambda: ...)  #any empty func would work
+        #NOTE ast trees dont have a node for comments, but we can abuse Name nodes since there are no validity checking
+        #NOTE need to wrap in Expr so its in a new line
+        return (_ast.Module([_ast.Expr(_ast.Name(f'#def {name}(*args, **kwargs): pass  #TODO provided'))]), lambda: ...)  #any empty func would work
 
     for gadget, func in all_gadgets.items():
         if gadget in seen:
@@ -167,48 +166,44 @@ def _try_gadget(name: str, all_gadgets: dict, seen: list):
             #print('trying', gadget)
 
             #func and this will be overwritten by the converters if needed
-            func_src_user = _inspect.getsource(func)
+            func_ast = _ast.parse(_inspect.getsource(func))
 
             fullargspec = _inspect.getfullargspec(func)
             required_gadgets = fullargspec.kwonlyargs
-            violations = _count_violations(func, required_gadgets)
+            violations = _count_violations(func_ast, required_gadgets)
             if violations:
-                func_src_user, func = _try_convert(func_src_user, required_gadgets, violations, gadget, all_gadgets, seen)
+                func_ast, func = _try_convert(func_ast, required_gadgets, violations, gadget, all_gadgets, seen)
                 if not func:
                     continue
             else:
                 #only when there was no violations is the function not rewritten and we have to manually remove kwonlyargs ourselves
-                func_src_user = func_src_user.splitlines()
-                if not violations:
-                    func_src_user[0] = f'def {gadget}({", ".join(fullargspec.args)}):'   #replace the header to exclude gadget use
-                func_src_user = '\n'.join(func_src_user) + '\n'
+                func_ast.body[0].args.kwonlyargs = []
+                func_ast.body[0].args.kw_defaults = []  #must match kwonlyargs
 
 
             #reaching this could mean theres no violations, or the violations are sorted out
             #XXX its unlikely that fullargspec.args changed after conversions if they were required, but just to be safe
             fullargspec = _inspect.getfullargspec(func)
-            func_src_user += f'{name} = {gadget}'  #tell the user we are using this specific gadget for the gadget they want
-            if not fullargspec.args:
-                func_src_user += '()'  #call the gadget to convert it to an attr access
-            func_src_user += '\n\n'
-
+            #tell the user we are using this specific gadget for the gadget they want
+            func_ast.body.append(_ast.Assign([_ast.Name(name)], _ast.Name(gadget) if fullargspec.args else _ast.Call(_ast.Name(gadget), [], [])))
+            func_ast = _ast.fix_missing_locations(func_ast)
         
             if not required_gadgets:   #no more to chain, return (base case)
-                return (func_src_user, func)
+                return (func_ast, func)
             
             good = True
             for next_gadget in required_gadgets:
-                next_src, _ = _try_gadget(next_gadget, all_gadgets, seen + [gadget])
+                next_ast, _ = _try_gadget(next_gadget, all_gadgets, seen + [gadget])
 
                 #(at least) one of the required gadgets does not have a valid chain, drop out
-                if not next_src:
+                if not next_ast:
                     good = False
                     break
                 
-                func_src_user = _put_code_into_func_body(func_src_user, next_src)
+                func_ast = _put_code_into_func_body(func_ast, next_ast)
             
             if good:
-                return (func_src_user, func)  #generated code so far, current gadget func
+                return (func_ast, func)  #generated code so far, current gadget func
     
     return (None, None) #could be due to a gadget requiring an unknown gadget
 
@@ -266,6 +261,7 @@ def __getattr__(name):
             params = _inspect.getfullargspec(gadget_func).args
             def param_wrapper(*args):
                 nonlocal chain
+                chain = _ast.unparse(chain) + '\n'
                 chain += f'{name}'
                 if params: 
                     chain += f'({", ".join(args)})'
