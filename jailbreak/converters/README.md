@@ -24,7 +24,3 @@ They are then applied in all permutations of ordering; each newly rewritten func
 Converters should attempt to not introduce new regressions that require running another converter to fix - this is not supported (and also unlikely in the future due to the exponential search space) and the gadget chain will simply fail.
 
 There should be no subdirectory in the converters directory - all files containing converters should be at the root directory for correct importing.
-
-### Usage
-
-Converters are used automatically in the exploit chain generator as needed, but one can manually import the converters using `from jailbreak.converters.<subdirs> import <converter full name>`, similar to accessing raw gadgets.

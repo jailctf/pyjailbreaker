@@ -113,6 +113,7 @@ class Inliner(_ast.NodeTransformer):
     [a:=1, gadget_call_0]
     """
     #TODO a better way to do this would be to figure out a statement -> expression converter and use it here instead of precomputing (but stmt -> expr is not always possible so)
+    #alternatively document this and avoid creating gadgets with too many expression quirks (common cases like `[gadget_call(a) for a in list]` still exists though, but is definitely rewritable to avoid hitting this)
     def generic_visit(self, node: _ast.AST):
         def get_stmt_body_attrs(node):
             return [attr for attr, data in vars(node).items() if isinstance(data, list) and len(data) > 0 and isinstance(data[0], _ast.stmt)]

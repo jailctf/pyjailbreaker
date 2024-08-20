@@ -35,11 +35,12 @@ assert all(c not in payload for c in '\'"')
 print("\n---------\n")
 
 #example get shell full chain with user gadget
-def sys__user(*, str):
-    return [c for c in ().__class__.__base__.__subclasses__() if 'wrap_close' in str(c)][0].__init__.__globals__['sys']
+def sys__user():
+    import sys
+    return sys
 
-#reset config so jail has nothing provided and no restrictions
-jailbreak.config()
+#reset config so jail requires the use of sys__user
+jailbreak.config(char='\'"')
 #provide sys gadget
 jailbreak.register_user_gadget(sys__user, 'python')
 
