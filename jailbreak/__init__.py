@@ -348,6 +348,13 @@ def _try_gadget(name: str, all_gadgets: dict, seen: list):
 
 
             #reaching this could mean theres no violations, or the violations are sorted out
+                
+            #remove gadget docstrings if any (ref: ast.get_docstring)
+            #body of the functiondef, should at least have one element or else its an invalid function anyway
+            first_func_body_node = func_ast.body[0].body[0]
+            if isinstance(first_func_body_node, _ast.Expr) and isinstance(first_func_body_node.value, _ast.Constant) and isinstance(first_func_body_node.value.value, str): 
+                func_ast.body[0].body.pop(0)
+
             #XXX its unlikely that fullargspec.args changed after conversions if they were required, but just to be safe
             fullargspec = _inspect.getfullargspec(func)
             if _set_config['inline']:
