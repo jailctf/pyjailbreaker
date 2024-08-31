@@ -29,13 +29,16 @@ def register_user_gadget(func, gadget_type):
 #for use as decorator on converters
 def register_converter(*nodes, **violations):
     def apply(converter):
-        #we dont really care about the type since violations are reported as a set of all violations anyway
         for type, list in violations.items():
+            type_violations = {} if type not in _applicable_converters else _applicable_converters[type]
+
             for violation in list:
-                if violation in _applicable_converters:
-                    _applicable_converters[violation].append(converter)
+                if violation in type_violations:
+                    type_violations[violation].append(converter)
                 else:
-                    _applicable_converters[violation] = [converter]
+                    type_violations[violation] = [converter]
+
+            _applicable_converters[type] = type_violations
 
         for n in nodes:
             _registered_converters[n].append(converter)
@@ -219,8 +222,11 @@ def _exempt_node(node, required_gadgets, func_name):
         return True
 
     return False
-        
-def _count_violations(func_ast: _ast.Module, required_gadgets) -> int:
+         
+#fields that works as a whitelist instead of a blacklist in violations
+_whitelist_fields = ['platforms', 'versions']
+
+def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
     #add token info
     import asttokens
     tokens = asttokens.ASTTokens(_ast.unparse(func_ast), func_ast)
@@ -230,41 +236,55 @@ def _count_violations(func_ast: _ast.Module, required_gadgets) -> int:
     #handle manual information
     checks = {}
     if _ast.get_docstring(func_ast.body[0]) != None:
-        for line in _ast.get_docstring(func_ast.body[0]).__doc__.splitlines():
+        for line in _ast.get_docstring(func_ast.body[0]).strip().splitlines():
             field, val = line.strip().split(':', 1)
-            checks[field] = _ast.literal_eval(val)
+            checks[field.strip()] = _ast.literal_eval(val.strip())
 
     #handle automatic information
     checks['ast'] = {type(n) for n in all_nodes}
     checks['char'] = {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) for c in tok.string}
     #TODO also make a substring check instead of just char
 
-    violations = set()
+    violations = {}
     for field, restrictions in _set_config['restrictions'].items():
-        violations |= set(restrictions).intersection(set(checks[field]))
+        #e.g. restrictions are a, b and checks are b, c, d
+        #for whitelist: we return a since a is an requirement thats not satisfied
+        #for blacklist: we return b since b is banned
+        type_violations = set(restrictions).intersection(set(restrictions).difference(set(checks[field]))) if field in _whitelist_fields else set(restrictions).intersection(set(checks[field]))
+
+        #only track it if it has a violation
+        if type_violations:
+            violations[field] = type_violations
+
+    for a, b in violations.items():
+        print(a, b)
 
     return violations
 
-def _choose_converter_for_violation(violation, gadget: str, all_gadgets: dict, seen: list):
+def _choose_converter_for_violation(type, violation, gadget: str, all_gadgets: dict, seen: list):
     #choose first one that would succeed under our jail (there is no point in trying other converters if this one succeeds, assuming the kwargs annotations via @register_converter accurately depicts what the converter does)
-    for converter in _applicable_converters[violation]:
+    for converter in _applicable_converters[type][violation]:
         converter_required_gadgets = _inspect.getfullargspec(converter).kwonlyargs
         for next_gadget in converter_required_gadgets:
             chain, _ = _try_gadget(next_gadget, all_gadgets, seen + [gadget])
             if chain:
                 return (converter, chain)
                 
-def _try_convert(func_ast: _ast.Module, required_gadgets: list, violations: list, gadget: str, all_gadgets: dict, seen: list):
+def _try_convert(func_ast: _ast.Module, required_gadgets: list, violations: dict, gadget: str, all_gadgets: dict, seen: list):
     #obtain a list of all converters that we should run to avoid the violations
     converters_to_run = set()
     generated_chains_for_converters = {}
-    for violation in violations:
-        if violation in _applicable_converters and _applicable_converters[violation]:
-            converter, chain = _choose_converter_for_violation(violation, gadget, all_gadgets, seen)
-            generated_chains_for_converters[converter] = chain
-            converters_to_run.add(converter)
-        else:
-            return (None, None)  #not all violations can be converted away, give up on this chain
+    for type, type_violations in violations.items():
+        if type not in _applicable_converters:   #no converters registered for the type
+            return (None, None)
+        
+        for violation in type_violations:
+            if violation in _applicable_converters[type] and _applicable_converters[type][violation]:
+                converter, chain = _choose_converter_for_violation(type, violation, gadget, all_gadgets, seen)
+                generated_chains_for_converters[converter] = chain
+                converters_to_run.add(converter)
+            else:
+                return (None, None)  #not all violations can be converted away, give up on this chain
 
     #XXX dumb heuristic - try all converter application orders to see if any can actually achieve no violations
     #XXX situations where e.g. the strless converter uses chr(), which introduces CALLs and requires callless converter to run on it yet no CALLs were in the main gadget will just fail with this method
