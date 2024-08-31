@@ -85,7 +85,8 @@ jailbreak.config(
     platforms=["windows", "mac", "linux"],  # a list of platforms that the gadget should support
     versions=[10, 11, 12],                  # a list of versions that the gadget should support
     pickle=[pickle.REDUCE, ...],            # a list of pickle ops to be banned
-    provided=["<gadget name>", ...],        # list of gadgets that is already provided, including any names of builtins already provided.
+    provided=["<gadget name>", ...],        # list of gadgets (gadget file names) that is already provided, including any names of builtins already provided.
+    banned=["<gadget full name>", ...],     # list of full gadget names (gadget function names) that should not be used for any reason
     inline=False                            # boolean for whether the returned gadget chain should be inlined or not (default: false)
 )
 

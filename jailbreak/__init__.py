@@ -5,7 +5,7 @@ from types import FunctionType as _FunctionType
 _registered_converters = {n: [] for a in _ast.AST.__subclasses__() for n in a.__subclasses__()} | {n: [] for n in _ast.AST.__subclasses__()}
 _applicable_converters = {}
 
-_set_config = {'restrictions': {}, 'provided': [], 'inline': False}
+_set_config = {'restrictions': {}, 'provided': [], 'banned': [], 'inline': False}
 _user_gadgets = {dirname: {} for dirname in next(_os.walk(__path__[0] + '/gadgets'))[1] if dirname != '__pycache__'}  #prepopulate gadget types from subdirs in gadgets
 
 def config(**kwargs):
@@ -13,6 +13,7 @@ def config(**kwargs):
 
     #put these in another field since they are not restrictions
     _set_config['provided'] = kwargs.pop('provided', [])
+    _set_config['banned'] = kwargs.pop('banned', [])
     _set_config['inline'] = kwargs.pop('inline', False)
 
     _set_config['restrictions'] = kwargs
@@ -321,6 +322,10 @@ def _try_gadget(name: str, all_gadgets: dict, seen: list):
 
     for gadget, func in all_gadgets.items():
         if gadget in seen:
+            continue
+
+        if gadget in _set_config['banned']:
+            #gadget is user banned, ignore
             continue
 
         if gadget.startswith(name):

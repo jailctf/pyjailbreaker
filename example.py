@@ -35,9 +35,9 @@ assert all(c not in payload for c in '\'"')
 print("\n---------\n")
 
 #example platform specific requirements usage
-jailbreak.config(platforms=["linux"], versions=["12"])
+jailbreak.config(platforms=["linux"], versions=[12], banned=['get_shell__os_system']) #force it to use platform specific gadgets
 
-payload = jailbreak.get_shell("'sh'")
+payload = jailbreak.get_shell("'ls'")
 print(payload)
 
 print("\n---------\n")
