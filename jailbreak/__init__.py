@@ -250,14 +250,17 @@ def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
         #e.g. restrictions are a, b and checks are b, c, d
         #for whitelist: we return a since a is an requirement thats not satisfied
         #for blacklist: we return b since b is banned
-        type_violations = set(restrictions).intersection(set(restrictions).difference(set(checks[field]))) if field in _whitelist_fields else set(restrictions).intersection(set(checks[field]))
+
+        if field in _whitelist_fields:
+            #in whitelist mode, if the type doesnt exist in checks, we assume it supports everything and thus there are no violations
+            type_violations = set(restrictions).intersection(set(restrictions).difference(set(checks[field]))) if field in checks else {}
+        else:
+            #in blacklist mode, if the type doesnt exist in checks, we assume it supports nothing and thus all restrictions are violated
+            type_violations = set(restrictions).intersection(set(checks[field])) if field in checks else set(restrictions)
 
         #only track it if it has a violation
         if type_violations:
             violations[field] = type_violations
-
-    for a, b in violations.items():
-        print(a, b)
 
     return violations
 

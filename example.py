@@ -34,19 +34,27 @@ assert all(c not in payload for c in '\'"')
 
 print("\n---------\n")
 
-#example get shell full chain with user gadget
-def sys__user():
-    import sys
-    return sys
-
-#reset config so jail requires the use of sys__user
-jailbreak.config(char='\'"')
-#provide sys gadget
-jailbreak.register_user_gadget(sys__user, 'python')
+#example platform specific requirements usage
+jailbreak.config(platforms=["linux"], versions=["12"])
 
 payload = jailbreak.get_shell("'sh'")
 print(payload)
-# exec(payload, {'__builtins__': {}})
+
+print("\n---------\n")
+
+#example get shell full chain with user gadget
+def os__user():
+    import os
+    return os
+
+#reset config so jail requires the use of os__user
+jailbreak.config(char='\'"')
+#provide sys gadget
+jailbreak.register_user_gadget(os__user, 'python')
+
+payload = jailbreak.get_shell("'sh'")
+print(payload)
+# exec(payload, {'__builtins__': {"os": __import__("os"))}})
 
 print("\n---------\n")
 
