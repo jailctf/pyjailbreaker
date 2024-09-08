@@ -274,7 +274,10 @@ def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
             #main gadget declaration, dont track
             if isinstance(node, _ast.FunctionDef) and node.name == func_ast.body[0].name:
                 #also only visit the body and not any other parts of the function def
-                for stmt in node.body:
+                for i, stmt in enumerate(node.body):
+                    #skip docstring if it exists (ref: ast.get_docstring)
+                    if isinstance(stmt, _ast.Expr) and isinstance(stmt.value, _ast.Constant) and isinstance(stmt.value.value, str): 
+                        continue
                     super().visit(stmt)  #visit instead of generic_visit to select the right type of func
             else:
                 all_nodes.append(node)  #otherwise still track
@@ -297,7 +300,7 @@ def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
 
         type_violations = matcher(restrictions, parser(all_nodes, tokens, exempt_tokens))
         
-        #print(field, type_violations)
+        #print(func_ast.body[0].name, field, type_violations)
 
         #only track it if it has a violation
         if type_violations:
@@ -341,7 +344,6 @@ def _try_convert(func_ast: _ast.Module, required_gadgets: list, violations: dict
         for converter in apply:
             new_ast = ApplyConverter(converter).visit(new_ast)
         new_func = _FunctionType(compile(new_ast, '<string>', 'exec').co_consts[0], globals())
-        #TODO figure out if docstrings are preserved after rewrite, since count violations require it (if it does we need to remove it at the end)
         #XXX we are assuming converters do not introduce new regressions, otherwise we will have to rerun the whole conversion test again when we see violations
         if not _count_violations(new_ast, required_gadgets):
             #add the required gadget chain(s) into the returned chain along with the transformed func
