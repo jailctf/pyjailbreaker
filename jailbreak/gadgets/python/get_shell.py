@@ -12,20 +12,20 @@ def get_shell__subprocess(cmd, *, subprocess):
 
 
 #useful for audit hook jails since this is not audited
-def get_shell__fork_exec_3_10(cmd, *, import_builtin_module):
+def get_shell__fork_exec_3_10(cmd, *, import_builtin_module, os):
     """
         platforms: ["linux"]
-        versions: [9, 10, 11]
+        versions: [8, 9, 10, 11]
     """
     #required for the child process to even execute correctly, otherwise its a silent death since the pipes cannot be established
-    errread, errwrite = import_builtin_module('os').pipe()
+    errread, errwrite = os.pipe()
     import_builtin_module('_posixsubprocess').fork_exec(['/bin/sh', '-c', cmd], (b'/bin/sh',), True, (errwrite,), None, None, -1, -1, -1, -1, -1, -1, errread, errwrite, True, False, None, None, None, -1, lambda: None)
     
 
-def get_shell__fork_exec_3_12(cmd, *, import_builtin_module):
+def get_shell__fork_exec_3_12(cmd, *, import_builtin_module, os):
     """
         platforms: ["linux"]
         versions: [12]
     """
-    errread, errwrite = import_builtin_module('os').pipe()
+    errread, errwrite = os.pipe()
     import_builtin_module('_posixsubprocess').fork_exec(['/bin/sh', '-c', cmd], (b'/bin/sh',), True, (errwrite,), None, None, -1, -1, -1, -1, -1, -1, errread, errwrite, True, False, 0, None, None, None, -1, lambda: None, False)    

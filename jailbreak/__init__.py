@@ -103,6 +103,14 @@ class Inliner(_ast.NodeTransformer):
             
         self.gadget_ast = NameRewrite().visit(gadget_ast)
 
+    #nested functions inside a gadget that accesses the gadget's variable will use nonlocal, but once we inline it it will be a global var ref
+    def visit_Nonlocal(self, node: _ast.Nonlocal):
+        new_node = _ast.Global(node.names)
+        new_node.lineno = node.lineno
+        new_node.col_offset = node.col_offset
+        new_node.end_lineno = node.end_lineno
+        new_node.end_col_offset = node.end_col_offset
+        return super().generic_visit(new_node)
 
     #XXX i think this breaks if walrus operators or any name assignment is done and is used by the calls as a param *inside* the same statement
     """
@@ -210,21 +218,6 @@ def _put_code_into_func_body(func_ast: _ast.Module, code_ast: _ast.Module):
     return _ast.fix_missing_locations(func_ast)
 
 
-def _exempt_node(node, required_gadgets, func_name):
-    #top level _ast node, generated on _ast.parse
-    if isinstance(node, _ast.Module):
-        return True
-
-    #main gadget declaration, ignore
-    if isinstance(node, _ast.FunctionDef) and node.name == func_name:
-        return True
-    
-    #using gadgets, ignore
-    if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name) and node.func.id in required_gadgets:
-        return True
-
-    return False
-
 
 def _handle_whitelist(restrictions: set, checks: list):
     #in whitelist mode, if the type doesnt exist in checks, we assume it supports everything and thus there are no violations
@@ -234,7 +227,7 @@ def _handle_blacklist(restrictions: set, checks: list):
     #in blacklist mode, if the type doesnt exist in checks, we assume it supports nothing and thus all restrictions are violated
     return set(restrictions).intersection(set(checks)) if checks else set(restrictions)
 
-def _manual_check(tokens: _asttokens.ASTTokens, all_nodes: list):
+def _manual_check(all_nodes: list, tokens: _asttokens.ASTTokens, exempt_tokens: set):
     #handle manual information
     checks = {}
     if _ast.get_docstring(tokens.tree.body[0]) != None:
@@ -248,12 +241,13 @@ def _manual_check(tokens: _asttokens.ASTTokens, all_nodes: list):
 #for blacklist: we return b since b is banned
 _restrictions_mapping = {
     #automatic fields
-    'ast': (_handle_blacklist, lambda _, all_nodes: {type(n) for n in all_nodes}),
-    'char': (_handle_blacklist, lambda tokens, all_nodes: {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) for c in tok.string}),
+    'ast': (_handle_blacklist, lambda all_nodes, *_: {type(n) for n in all_nodes}),
+    'char': (_handle_blacklist, lambda all_nodes, tokens, exempt_tokens: {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) if tok not in exempt_tokens for c in tok.string}),
     'substr': (
         #requires a custom matcher and parser since we need the `res in check` part instead of a hash match that _handle_blacklist does with the set.intersection
         lambda restrictions, checks: {res for res, check in _itertools.product(restrictions, checks) if res in check} if checks else set(restrictions), 
-        lambda tokens, all_nodes: {tok.string for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token)}
+        #''.join is needed to properly match (most, same line) substrings that span across multiple tokens, eg "()"
+        lambda all_nodes, tokens, exempt_tokens: {''.join(tok.string for tok in tokens.token_range(n.first_token, n.last_token) if tok not in exempt_tokens) for n in all_nodes if hasattr(n, 'first_token')}
     ),
     #docstring fields
     'platforms': (_handle_whitelist, _manual_check),
@@ -263,15 +257,47 @@ _restrictions_mapping = {
 def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
     #add token info
     tokens = _asttokens.ASTTokens(_ast.unparse(func_ast), func_ast)
-    all_nodes = [n for n in _ast.walk(tokens.tree) if not _exempt_node(n, required_gadgets, func_ast.body[0].name)]
-    
+
+    all_nodes = []
+    exempt_tokens = set()
+    #need to actually traverse it instead of using ast.walk since we want to traverse only specific parts of an exempted node sometimes
+    class Traverser(_ast.NodeVisitor):
+        def generic_visit(self, node: _ast.AST):
+            all_nodes.append(node)
+            super().generic_visit(node)
+
+        #do not include module nodes in all_nodes - this only exists once as the top level declaration
+        def visit_Module(self, node: _ast.Module):
+            super().generic_visit(node)
+
+        def visit_FunctionDef(self, node: _ast.FunctionDef):
+            #main gadget declaration, dont track
+            if isinstance(node, _ast.FunctionDef) and node.name == func_ast.body[0].name:
+                #also only visit the body and not any other parts of the function def
+                for stmt in node.body:
+                    super().visit(stmt)  #visit instead of generic_visit to select the right type of func
+            else:
+                all_nodes.append(node)  #otherwise still track
+                super().generic_visit(node)
+
+        def visit_Name(self, node: _ast.Name):
+            nonlocal exempt_tokens
+            #exempt tokens that references gadgets coz we can rewrite those
+            if node.id in required_gadgets:
+                exempt_tokens = exempt_tokens.union(tokens.token_range(node.first_token, node.last_token))
+            super().generic_visit(node)
+
+    Traverser().visit(tokens.tree)
+
     violations = {}
     for field, restrictions in _set_config['restrictions'].items():
         #apply the right handlers to the restriction type
         assert field in _restrictions_mapping, f"unsupported type {field}!"
         matcher, parser = _restrictions_mapping[field]
 
-        type_violations = matcher(restrictions, parser(tokens, all_nodes))
+        type_violations = matcher(restrictions, parser(all_nodes, tokens, exempt_tokens))
+        
+        #print(field, type_violations)
 
         #only track it if it has a violation
         if type_violations:
