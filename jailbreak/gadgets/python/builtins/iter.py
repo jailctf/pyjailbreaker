@@ -1,0 +1,13 @@
+"""
+Gadgets that work the same as the builtin function `iter`.
+"""
+
+def iter__attrerror(seq):
+    try:
+        def hm():
+            yield from seq
+        g = hm()
+        g.send(None)
+        g.send(1)
+    except Exception as e:
+        return e.obj
