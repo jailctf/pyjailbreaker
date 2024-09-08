@@ -106,3 +106,35 @@ payload = jailbreak.test_nested_args()
 print(payload + '\n')
 payload = jailbreak.test_other_stmt_blocks()
 print(payload)
+
+print("\n---------\n")
+
+#cleaner test
+from jailbreak.utils.cleaner import cleaner
+print(cleaner(
+"""
+import sys as haha
+import builtins
+
+test = 1
+test2 = test
+
+a, b = "scope", "no overwrite"
+
+print(haha.argv)
+
+with open(__file__) as f:
+    def haha(a, b):
+        test = 2
+        what = 'hm'
+        try:
+            for i in range(10):
+                builtins.print(i, a, b, test)
+        except Exception as what:
+            print(what)
+        print(what)
+        return 3
+
+print(haha(test, test2))
+print(a, b, f)
+""", in_scope=['range', 'print', 'open', 'Exception', '__file__']))
