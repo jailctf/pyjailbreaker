@@ -1,8 +1,9 @@
 #avoid polluting the normal getattr space
-import ast as _ast, os as _os, importlib as _importlib, inspect as _inspect, itertools as _itertools
+import ast as _ast, os as _os, importlib as _importlib, inspect as _inspect, itertools as _itertools, asttokens as _asttokens
 from types import FunctionType as _FunctionType
 
 _registered_converters = {n: [] for a in _ast.AST.__subclasses__() for n in a.__subclasses__()} | {n: [] for n in _ast.AST.__subclasses__()}
+#TODO wildcard converters
 _applicable_converters = {}
 
 _set_config = {'restrictions': {}, 'provided': [], 'banned': [], 'inline': False}
@@ -223,41 +224,54 @@ def _exempt_node(node, required_gadgets, func_name):
         return True
 
     return False
-         
-#fields that works as a whitelist instead of a blacklist in violations
-_whitelist_fields = ['platforms', 'versions']
 
-def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
-    #add token info
-    import asttokens
-    tokens = asttokens.ASTTokens(_ast.unparse(func_ast), func_ast)
 
-    all_nodes = [n for n in _ast.walk(tokens.tree) if not _exempt_node(n, required_gadgets, func_ast.body[0].name)]
-    
+def _handle_whitelist(restrictions: set, checks: list):
+    #in whitelist mode, if the type doesnt exist in checks, we assume it supports everything and thus there are no violations
+    return set(restrictions).intersection(set(restrictions).difference(set(checks))) if checks else {}
+
+def _handle_blacklist(restrictions: set, checks: list):
+    #in blacklist mode, if the type doesnt exist in checks, we assume it supports nothing and thus all restrictions are violated
+    return set(restrictions).intersection(set(checks)) if checks else set(restrictions)
+
+def _manual_check(tokens: _asttokens.ASTTokens, all_nodes: list):
     #handle manual information
     checks = {}
-    if _ast.get_docstring(func_ast.body[0]) != None:
-        for line in _ast.get_docstring(func_ast.body[0]).strip().splitlines():
+    if _ast.get_docstring(tokens.tree.body[0]) != None:
+        for line in _ast.get_docstring(tokens.tree.body[0]).strip().splitlines():
             field, val = line.strip().split(':', 1)
             checks[field.strip()] = _ast.literal_eval(val.strip())
 
-    #handle automatic information
-    checks['ast'] = {type(n) for n in all_nodes}
-    checks['char'] = {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) for c in tok.string}
-    #TODO also make a substring check instead of just char
+#supported fields; field name -> matcher, parser
+#e.g. restrictions are a, b and checks are b, c, d
+#for whitelist: we return a since a is an requirement thats not satisfied
+#for blacklist: we return b since b is banned
+_restrictions_mapping = {
+    #automatic fields
+    'ast': (_handle_blacklist, lambda _, all_nodes: {type(n) for n in all_nodes}),
+    'char': (_handle_blacklist, lambda tokens, all_nodes: {c for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token) for c in tok.string}),
+    'substr': (
+        #requires a custom matcher and parser since we need the `res in check` part instead of a hash match that _handle_blacklist does with the set.intersection
+        lambda restrictions, checks: {res for res, check in _itertools.product(restrictions, checks) if res in check} if checks else set(restrictions), 
+        lambda tokens, all_nodes: {tok.string for n in all_nodes if hasattr(n, 'first_token') for tok in tokens.token_range(n.first_token, n.last_token)}
+    ),
+    #docstring fields
+    'platforms': (_handle_whitelist, _manual_check),
+    'versions': (_handle_whitelist, _manual_check),
+}
 
+def _count_violations(func_ast: _ast.Module, required_gadgets) -> dict:
+    #add token info
+    tokens = _asttokens.ASTTokens(_ast.unparse(func_ast), func_ast)
+    all_nodes = [n for n in _ast.walk(tokens.tree) if not _exempt_node(n, required_gadgets, func_ast.body[0].name)]
+    
     violations = {}
     for field, restrictions in _set_config['restrictions'].items():
-        #e.g. restrictions are a, b and checks are b, c, d
-        #for whitelist: we return a since a is an requirement thats not satisfied
-        #for blacklist: we return b since b is banned
+        #apply the right handlers to the restriction type
+        assert field in _restrictions_mapping, f"unsupported type {field}!"
+        matcher, parser = _restrictions_mapping[field]
 
-        if field in _whitelist_fields:
-            #in whitelist mode, if the type doesnt exist in checks, we assume it supports everything and thus there are no violations
-            type_violations = set(restrictions).intersection(set(restrictions).difference(set(checks[field]))) if field in checks else {}
-        else:
-            #in blacklist mode, if the type doesnt exist in checks, we assume it supports nothing and thus all restrictions are violated
-            type_violations = set(restrictions).intersection(set(checks[field])) if field in checks else set(restrictions)
+        type_violations = matcher(restrictions, parser(tokens, all_nodes))
 
         #only track it if it has a violation
         if type_violations:

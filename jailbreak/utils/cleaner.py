@@ -30,7 +30,6 @@ def cleaner(code, name_chars=__import__('string').ascii_lowercase, in_scope=[]):
             if name not in scope:
                 scope[name] = generate_name()
             setattr(node, field, scope[name])
-            print(scope)
         
         if isinstance(node, ast.Name):
             convert_name(node, 'id')
