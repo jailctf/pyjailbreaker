@@ -209,8 +209,8 @@ def _try_convert(gadget: models.GadgetBase, required_gadgets: 'list[_FunctionTyp
     #none of the applies worked, so give up
     return False
 
-#TODO all_gadgets could be converted into a dict[str, GadgetBase] to memoize finished dependency chains
-def _try_gadget(name: str, all_gadgets: 'dict[str, _FunctionType]', seen: 'list[str]', gadget_type: str):
+#all_gadgets will be replaced with gadgets as we find them
+def _try_gadget(name: str, all_gadgets: 'dict[str, _FunctionType | models.GadgetBase]', seen: 'list[str]', gadget_type: str):
     #terminate if provided
 
     #TODO cache this?
@@ -232,6 +232,11 @@ def _try_gadget(name: str, all_gadgets: 'dict[str, _FunctionType]', seen: 'list[
             continue
 
         if gadget_name.startswith(name):
+            #fast track: if we saw it and the gadget is memoized return early without computing again
+            if isinstance(func, models.GadgetBase):
+                #print('memoized', func)
+                return func
+
             #print('trying', gadget)
 
             gadget = gadget_class(func)
@@ -261,7 +266,9 @@ def _try_gadget(name: str, all_gadgets: 'dict[str, _FunctionType]', seen: 'list[
                 gadget.add_dependency(new_gadget)
 
             if good:
-                return gadget #generated code so far, current gadget func
+                #memoize the gadget for fast track return the next time we see it in another branch
+                all_gadgets[gadget_name] = gadget
+                return gadget
     
     return None #could be due to a gadget requiring an unknown gadget
 
