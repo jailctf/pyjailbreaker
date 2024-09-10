@@ -354,8 +354,12 @@ class GadgetBase(ModelBase):
 
 
     def _lookup_name(self, name):        
-        #get type name from the gadget's own type
-        gadget_type = list(gadget_type_mapping.keys())[list(gadget_type_mapping.values()).index(type(self))]
+        #get type name from the gadget's own type, traversing the mro if needed
+        keys, values = list(gadget_type_mapping.keys()), list(gadget_type_mapping.values())
+        for cls in type(self).mro():
+            if cls in values:
+                gadget_type = keys[values.index(cls)]
+
         #fetch func from _all_gadgets
         if name in all_gadgets[gadget_type]:
             return all_gadgets[gadget_type][name]
@@ -589,8 +593,7 @@ class PythonGadget(GadgetBase):
             self.chain_ast = self.func_ast  #also need to update chain_ast's reference to use the new one
         for converter in converters:
             for dep in converter.dependencies:
-                #make type hinting work again while enforcing the dependency assumption
-                assert isinstance(dep, type(self)), f'dep is of type {type(dep)}, not {type(self)}!'
+                #assume the dependencies are of the same effective class - its hard to check if theyre subclasses of each other
                 #the chain is basically cached already in dep.chain_ast, no need to worry about performance
                 self._put_code_into_func_body(self.chain_ast, dep.get_full_ast())
 

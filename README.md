@@ -113,7 +113,7 @@ The models have the following function interfaces:
 
 > Common (available on both gadget and converter interfaces):
 >  - add_dependency - tracks the dependency, and performs necessary modifications to the raw payload of the gadget to include the dependency
->  - create_dummy_gadget - creates a gadget with a raw payload specifying it's a dummy
+>  - _make_dummy - writes raw dummy data to the current specification to specify it's a dummy
 >  - `__repr__` - prints the gadget specification as a string, could be used to hardcode / manually modify a gadget chain
 > 
 > Gadgets:
