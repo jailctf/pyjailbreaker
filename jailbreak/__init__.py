@@ -1,69 +1,15 @@
 #avoid polluting the normal getattr space
-import ast as _ast, os as _os, importlib as _importlib, inspect as _inspect, itertools as _itertools, asttokens as _asttokens
+import ast as _ast, inspect as _inspect, itertools as _itertools, asttokens as _asttokens
 from types import FunctionType as _FunctionType
 
-#
-# Configuration interfaces
-#
-
-_registered_converters = {}  #mapping of converter function name -> list of types of data to apply to (e.g. specific AST nodes)
-#TODO wildcard converters
-_applicable_converters = {}  #violation type -> { violation node -> converter function }
-
-
-_set_config = {'restrictions': {}, 'provided': [], 'banned': [], 'inline': False}
-_user_gadgets = {dirname: {} for dirname in next(_os.walk(__path__[0] + '/gadgets'))[1] if dirname != '__pycache__'}  #prepopulate gadget types from subdirs in gadgets
-
-def config(**kwargs):
-    global _set_config
-
-    #put these in another field since they are not restrictions
-    _set_config['provided'] = kwargs.pop('provided', [])
-    _set_config['banned'] = kwargs.pop('banned', [])
-    _set_config['inline'] = kwargs.pop('inline', False)
-
-    _set_config['restrictions'] = kwargs
-
-
-#for adding custom gadgets by the user
-def register_user_gadget(func, gadget_type):
-    if gadget_type in _user_gadgets:
-        _user_gadgets[gadget_type][func.__name__] = func
-    else:
-        raise NameError(f"gadget type {gadget_type} does not exist!")
-
-
-#for use as decorator on converters
-#XXX currently implicitly assumes a violation type will be bound to a specific type of converter (e.g. PythonConverter for AST nodes)
-#    but it might not be the case, e.g. the `platforms` field could be shared across bytecode and python ast
-#    which means under this system AST converters could be used on bytecode, or vice versa
-#TODO figure out some way to key this (either via directory mapping similar to gadgets, manual typing, or better implicit conversion)
-#     current thought: reconciling gadget and converter structures seem better for parsing, but might be clunky for converters
-#     since theres not that many for each type compared to gadgets
-def register_converter(*nodes, **violations):
-    def apply(converter):
-        for type, list in violations.items():
-            type_violations = {} if type not in _applicable_converters else _applicable_converters[type]
-
-            for violation in list:
-                if violation in type_violations:
-                    type_violations[violation].append(converter)
-                else:
-                    type_violations[violation] = [converter]
-
-            _applicable_converters[type] = type_violations
-
-        _registered_converters[converter.__name__] = nodes
-        return converter
-
-    return apply
-
-#
-# End configuration interfaces
-#
+#config interfaces
+from .models import config, register_user_gadget, register_converter, all_gadgets, set_config as _set_config, applicable_converters as _applicable_converters
 
 from . import converters, utils, gadgets, models
 
+#
+# Gadget traverser below
+#
 
 def _handle_whitelist(restrictions: set, checks: list):
     #in whitelist mode, if the type doesnt exist in checks, we assume it supports everything and thus there are no violations
@@ -162,7 +108,7 @@ _count_violations_mapping = {
 def _choose_converter_for_violation(type: str, violation, gadget: str, all_gadgets: 'dict[str, _FunctionType]', seen: 'list[str]', converter_class: 'type[models.ConverterBase]', gadget_type: str) -> 'models.ConverterBase | None':
     #choose first one that would succeed under our jail (there is no point in trying other converters if this one succeeds, assuming the kwargs annotations via @register_converter accurately depicts what the converter does)
     for converter_func in _applicable_converters[type][violation]:
-        converter = converter_class(converter_func, applies=_registered_converters[converter_func.__name__])
+        converter = converter_class(converter_func)
         converter_required_gadgets = _inspect.getfullargspec(converter_func).kwonlyargs
         for next_gadget in converter_required_gadgets:
             gadget = _try_gadget(next_gadget, all_gadgets, seen + [gadget], gadget_type)
@@ -285,37 +231,20 @@ def __getattr__(name):
         if name == '__all__':
             return ['config', 'register_converter', 'register_user_gadget', 'converters', 'utils', 'gadgets', 'models']
 
-        gadgets_path = gadgets.__path__[0]
+        #look for the right type of gadgets and its gadgets dict
+        found = False
+        for gadget_type, gadget_mapping in all_gadgets.items():
+            for gadget_name in gadget_mapping:
+                if gadget_name.startswith(name):  #see get_all_gadgets_in_repo XXX note
+                    found = True
+                    break
+            if found:
+                break
 
-        gadget_type = None
-        #check user gadgets first
-        for gt, user_gadgets in _user_gadgets.items():
-            if name in [n.split('__')[0] for n in user_gadgets]:
-                gadget_type = gt
-
-        if not gadget_type:
-            #check repo gadgets
-            for path, _, filenames in _os.walk(gadgets_path):
-                for f in filenames:
-                    if f.lower() == name + '.py':
-                        gadget_type = _os.path.relpath(path, gadgets_path).split(_os.sep)[0]
-                        break
-
-        if gadget_type == None: raise NameError(f'gadget {name} not found!')
+        if not found: raise NameError(f'gadget {name} not found!')
         
-        #recursively obtain all gadgets of the same type
-        all_gadgets = dict(_user_gadgets[gadget_type])  #add the user gadgets into the available gadgets list
-        for path, _, filenames in _os.walk(gadgets_path + _os.sep + gadget_type):
-            for f in filenames:
-                filename, ext = _os.path.splitext(f)
-                if ext.lower() == '.py':
-                    #import the gadget file as a module
-                    gadget_module = _importlib.import_module('.' + _os.path.relpath(path, gadgets_path).replace(_os.sep, '.') + '.' + filename, gadgets.__name__)
-                    for attrname in dir(gadget_module):
-                        if attrname.startswith(filename):
-                            all_gadgets[attrname] = getattr(gadget_module, attrname)
-
-        return _try_gadget(name, all_gadgets, [], gadget_type)
+        #make a copy of the cached gadget_mapping so we can modify it with searched gadgets for memoization
+        return _try_gadget(name, dict(gadget_mapping), [], gadget_type)
     except Exception as e:
         import traceback
         traceback.print_exc()

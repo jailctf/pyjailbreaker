@@ -21,14 +21,104 @@ NOTE: The models do not perform any checks on whether the generated code conform
 
 from dataclasses import dataclass as _dataclass, field as _field
 from types import FunctionType as _FunctionType
-import ast as _ast, inspect as _inspect, copy as _copy
+import ast as _ast, inspect as _inspect, copy as _copy, os as _os, importlib as _importlib
+
+#
+# Configuration interfaces
+#
+
+registered_converters = {}  #mapping of converter function name -> list of types of data to apply to (e.g. specific AST nodes)
+#TODO wildcard converters
+applicable_converters = {}  #violation type -> { violation node -> converter function }
+
+
+set_config = {'restrictions': {}, 'provided': [], 'banned': [], 'inline': False}
+
+def config(**kwargs):
+    global set_config
+
+    #put these in another field since they are not restrictions
+    set_config['provided'] = kwargs.pop('provided', [])
+    set_config['banned'] = kwargs.pop('banned', [])
+    set_config['inline'] = kwargs.pop('inline', False)
+
+    set_config['restrictions'] = kwargs
+
+
+#for adding custom gadgets by the user
+def register_user_gadget(func, gadget_type):
+    if gadget_type in all_gadgets:
+        all_gadgets[gadget_type][func.__name__] = func
+    else:
+        raise NameError(f"gadget type {gadget_type} does not exist!")
+
+
+#for use as decorator on converters
+#XXX currently implicitly assumes a violation type will be bound to a specific type of converter (e.g. PythonConverter for AST nodes)
+#    but it might not be the case, e.g. the `platforms` field could be shared across bytecode and python ast
+#    which means under this system AST converters could be used on bytecode, or vice versa
+#TODO figure out some way to key this (either via directory mapping similar to gadgets, manual typing, or better implicit conversion)
+#     current thought: reconciling gadget and converter structures seem better for parsing, but might be clunky for converters
+#     since theres not that many for each type compared to gadgets
+def register_converter(*nodes, **violations):
+    def apply(converter):
+        for type, list in violations.items():
+            type_violations = {} if type not in applicable_converters else applicable_converters[type]
+
+            for violation in list:
+                if violation in type_violations:
+                    type_violations[violation].append(converter)
+                else:
+                    type_violations[violation] = [converter]
+
+            applicable_converters[type] = type_violations
+
+        registered_converters[converter.__name__] = nodes
+        return converter
+
+    return apply
+
+#
+# End configuration interfaces
+#
+
 
 
 #
 # Utility functions/classes
 #
 
-#TODO convenience function for creating gadget classes with just name (given a list of gadgets)
+#XXX have to define these here so we can actually import it
+
+#get all repo gadgets by traversing the repo
+def get_all_gadgets_in_repo() -> 'dict[str, dict[str, _FunctionType]]':
+    from . import gadgets
+    gadgets_path = gadgets.__path__[0]
+
+    all_gadgets = {}
+    for gadget_type in next(_os.walk(gadgets_path))[1]:
+        #non gadget dirs
+        if gadget_type in ['__pycache__']:
+            continue
+
+        all_gadgets[gadget_type] = {}
+
+        #recursively obtain all gadgets of the same type
+        for path, _, filenames in _os.walk(gadgets_path + _os.sep + gadget_type):
+            for f in filenames:
+                filename, ext = _os.path.splitext(f)
+                if ext.lower() == '.py':
+                    #import the gadget file as a module
+                    gadget_module = _importlib.import_module('.' + _os.path.relpath(path, gadgets_path).replace(_os.sep, '.') + '.' + filename, gadgets.__name__)
+                    for attrname in dir(gadget_module):
+                        if attrname.startswith(filename):  #XXX more accurately it should start with <filename>__, but it should be fine
+                            all_gadgets[gadget_type][attrname] = getattr(gadget_module, attrname)
+
+    return all_gadgets
+
+#XXX this doesnt update if any new gadgets show up until you reload the module but i dont think ppl would do that
+all_gadgets = get_all_gadgets_in_repo()   #cache the gadgets for use
+
 
 
 #attr decides which block of statements in func_ast we are currently operating on
@@ -191,15 +281,16 @@ class Inliner(_ast.NodeTransformer):
 #common base for both converters and gadgets
 @_dataclass(eq=False)
 class ModelBase:
+    #a gadget should either have a func passed to it, or a name that it would infer the func from
     #NOTE: func should not change even if it is rewritten
-    func: _FunctionType = _field(repr=False)  #no useful info to repr here, hide it
-    name: str = _field(init=False)
+    func: _FunctionType = _field(default=None, repr=False)  #no useful info to repr here, hide it
+    name: str = _field(default=None)
+
     #all dependencies of a gadget of subclass should have dependencies of also the same subclass
     dependencies: 'list[GadgetBase]' = _field(default_factory=list)
-    dummy: bool = _field(default=False, init=False)
-    #TODO some mechanism to track failed gadget chains for giving partial suggestions
+    dummy: bool = _field(default=False)
 
-    #TODO run add_dependency (and similar funcs, eg apply_converters) on post init so the raw data is properly converted
+    #TODO some mechanism to track failed gadget chains for giving partial suggestions
 
     #create a dummy gadget - child classes should override it to provide dummy data for their respective types
     @classmethod
@@ -211,7 +302,17 @@ class ModelBase:
         return gadget
 
     def __post_init__(self):
-        self.name = self.func.__name__
+        #TODO convert gadget to a dummy if dummy = true on init
+        #TODO run add_dependency (and similar funcs, eg apply_converters) on post init so the raw data is properly converted
+
+        assert self.func or self.name, "must provide either func or name!"
+        if self.func: 
+            self.name = self.func.__name__
+        else:
+            #get type name from the gadget's own type
+            gadget_type = list(gadget_type_mapping.keys())[list(gadget_type_mapping.values()).index(type(self))]
+            #fetch func from _all_gadgets
+            self.func = all_gadgets[gadget_type][self.name]
 
     def add_dependency(self, dependency):
         self.dependencies.append(dependency)
@@ -247,12 +348,13 @@ class GadgetBase(ModelBase):
 @_dataclass(eq=False)
 class ConverterBase(ModelBase):
     #what data this converter applies to
-    applies: list = _field(default_factory=list)
+    applies: list = _field(init=False, repr=False)
 
     #we must make applies default due to how dataclasses work, so assert here just to make sure
     def __post_init__(self):
         super().__post_init__()
-        assert self.applies, "applies is empty"
+        #XXX this introduces more dependencies on global namespace but whatever finding gadget given anme also uses that
+        self.applies = registered_converters[self.func.__name__]
 
     #attempts to convert some raw data using this converter
     #NOTE: raw data since we dont want to change the gadget itself at this stage,
