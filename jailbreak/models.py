@@ -299,13 +299,12 @@ class ModelBase:
         #name is already set
 
     #NOTE child classes should check if its a dummy before adding their own data
-    def __post_init__(self) -> bool:
+    def __post_init__(self):
         if self.dummy:
             self._make_dummy()
             return
-        
-        #TODO run add_dependency (and similar funcs, eg apply_converters) on post init so the raw data is properly converted
 
+        #populate both func or name given either one of them
         assert self.func or self.name, "must provide either func or name!"
         if self.func: 
             self.name = self.func.__name__
@@ -313,6 +312,17 @@ class ModelBase:
             #gadgets and converters have different ways of looking this up
             self.func = self._lookup_name(self.name)
             assert self.func, f'{self.name} not found ({type(self)})!'
+
+    #NOTE LEAF child classes should run this at the end of their __post_init__
+    #     aka this should be run last in __post_init__
+    def _transform_data(self):
+        #run add_dependency on all dependencies
+        #NOTE this has to be done for every data field that has a setter if child classes have them
+        #     e.g. converters -> apply_converters
+        dependencies = self.dependencies
+        self.dependencies = []
+        for dep in dependencies:
+            self.add_dependency(dep)
 
     def _lookup_name(self, name):
         assert False, 'not implemented'
@@ -334,6 +344,15 @@ class GadgetBase(ModelBase):
     def __call__(self, *args, **kwargs):
         assert False, "gadget call not implemented"
 
+    def _transform_data(self):
+        #run apply_converters on the uninitialized converters
+        converters = self.converters
+        self.converters = []
+        self.apply_converters(converters)
+        #before deps
+        super()._transform_data()
+
+
     def _lookup_name(self, name):        
         #get type name from the gadget's own type
         gadget_type = list(gadget_type_mapping.keys())[list(gadget_type_mapping.values()).index(type(self))]
@@ -350,10 +369,16 @@ class GadgetBase(ModelBase):
     def extract(self):
         return None
 
-    #apply the converters, along with raw data that weve converted
+    #apply the converters, along with raw data that weve converted (or generate the data if none is provided)
+    #NOTE: returns data for child classes to apply it to the right field
     #NOTE: ALL converters in this list should be the same type
-    def apply_converters(self, converters: 'list[ConverterBase]', data):
+    def apply_converters(self, converters: 'list[ConverterBase]', data = None):
+        if not data:
+            data = self.extract()
+            for converter in converters:
+                data = converter.convert(data)
         self.converters += converters
+        return data
 
 
 #documents an converter
@@ -371,6 +396,8 @@ class ConverterBase(ModelBase):
         
         #XXX this introduces more dependencies on global namespace but whatever finding gadget given anme also uses that
         self.applies = registered_converters[self.func]
+
+        #NOTE remember to run _transform_data if there are data to transform
 
     def _lookup_name(self, name):        
         #fetch func from registered_converters
@@ -415,7 +442,7 @@ class PythonGadget(GadgetBase):
         #NOTE ast trees dont have a node for comments, but we can abuse Name nodes since there are no validity checking
         #NOTE need to wrap in Expr so its in a new line
         self.func_ast = _ast.Module([_ast.Expr(_ast.Name(f'#def {self.name}(*args, **kwargs): pass  #TODO provided'))], [])
-        self.chain_ast = self.func_ast
+        self.chain_ast = _ast.Module([], []) if not self.inline else self.func_ast
         self.orig_ast = _copy.deepcopy(self.func_ast)
 
 
@@ -426,6 +453,8 @@ class PythonGadget(GadgetBase):
             self.func_ast = _ast.parse(_inspect.getsource(self.func).strip())  #strip to accomodate for nested function sources (e.g. the one at create_dummy_gadget)
             self.orig_ast = _copy.deepcopy(self.func_ast)
             self.chain_ast = _ast.Module([], []) if not self.inline else self.func_ast #empty container if not inline else same ref as func_ast coz the chain directly modifies the func_ast
+
+            self._transform_data()
 
     #this should run when we are prepping the raw gadget for chaining - it would add the required assigns/renaming for the gadget to be used by other gadgets
     def _ready_gadget_for_use(self, ast: _ast.Module) -> _ast.Module:        
@@ -552,10 +581,10 @@ class PythonGadget(GadgetBase):
         return _copy.deepcopy(self.func_ast)
 
     #override: basically same thing as add_dependency, but we directly put code from the converter dependencies into ours
-    def apply_converters(self, converters: 'list[ConverterBase]', data: _ast.AST):
-        super().apply_converters(converters, data)
+    def apply_converters(self, converters: 'list[ConverterBase]', data: _ast.AST = None):
         #replace func_ast with the new data we computed
-        self.func_ast = data
+        self.func_ast = super().apply_converters(converters, data)
+
         if self.inline:
             self.chain_ast = self.func_ast  #also need to update chain_ast's reference to use the new one
         for converter in converters:
@@ -564,6 +593,9 @@ class PythonGadget(GadgetBase):
                 assert isinstance(dep, type(self)), f'dep is of type {type(dep)}, not {type(self)}!'
                 #the chain is basically cached already in dep.chain_ast, no need to worry about performance
                 self._put_code_into_func_body(self.chain_ast, dep.get_full_ast())
+
+        #for chaining if needed (very unlikely this will have child classes but for consistency since base class also returns data)
+        return self.func_ast
 
 
 #convenience class for creating inline python gadgets without declaring it every time
