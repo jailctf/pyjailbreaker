@@ -167,7 +167,7 @@ def _try_gadget(name: str, all_gadgets: 'dict[str, _FunctionType | models.Gadget
 
 
     if name in _set_config['provided']:
-        return gadget_class.create_dummy_gadget(name)
+        return gadget_class(name=name, dummy=True)
 
     for gadget_name, func in all_gadgets.items():
         if gadget_name in seen:

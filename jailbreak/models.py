@@ -27,7 +27,7 @@ import ast as _ast, inspect as _inspect, copy as _copy, os as _os, importlib as 
 # Configuration interfaces
 #
 
-registered_converters = {}  #mapping of converter function name -> list of types of data to apply to (e.g. specific AST nodes)
+registered_converters = {}  #mapping of converter function -> list of types of data to apply to (e.g. specific AST nodes)
 #TODO wildcard converters
 applicable_converters = {}  #violation type -> { violation node -> converter function }
 
@@ -73,7 +73,7 @@ def register_converter(*nodes, **violations):
 
             applicable_converters[type] = type_violations
 
-        registered_converters[converter.__name__] = nodes
+        registered_converters[converter] = nodes
         return converter
 
     return apply
@@ -292,27 +292,30 @@ class ModelBase:
 
     #TODO some mechanism to track failed gadget chains for giving partial suggestions
 
-    #create a dummy gadget - child classes should override it to provide dummy data for their respective types
-    @classmethod
-    def create_dummy_gadget(cls, name: str):
+    #convert the gadget into a dummy gadget - child classes should override it to provide dummy data for their respective types
+    def _make_dummy(self):
         def dummy(): pass
-        gadget = cls(dummy)
-        gadget.name = name
-        gadget.dummy = True
-        return gadget
+        self.func = dummy
+        #name is already set
 
-    def __post_init__(self):
-        #TODO convert gadget to a dummy if dummy = true on init
+    #NOTE child classes should check if its a dummy before adding their own data
+    def __post_init__(self) -> bool:
+        if self.dummy:
+            self._make_dummy()
+            return
+        
         #TODO run add_dependency (and similar funcs, eg apply_converters) on post init so the raw data is properly converted
 
         assert self.func or self.name, "must provide either func or name!"
         if self.func: 
             self.name = self.func.__name__
         else:
-            #get type name from the gadget's own type
-            gadget_type = list(gadget_type_mapping.keys())[list(gadget_type_mapping.values()).index(type(self))]
-            #fetch func from _all_gadgets
-            self.func = all_gadgets[gadget_type][self.name]
+            #gadgets and converters have different ways of looking this up
+            self.func = self._lookup_name(self.name)
+            assert self.func, f'{self.name} not found ({type(self)})!'
+
+    def _lookup_name(self, name):
+        assert False, 'not implemented'
 
     def add_dependency(self, dependency):
         self.dependencies.append(dependency)
@@ -330,6 +333,15 @@ class GadgetBase(ModelBase):
     #user facing interface, must implement for all gadgets
     def __call__(self, *args, **kwargs):
         assert False, "gadget call not implemented"
+
+    def _lookup_name(self, name):        
+        #get type name from the gadget's own type
+        gadget_type = list(gadget_type_mapping.keys())[list(gadget_type_mapping.values()).index(type(self))]
+        #fetch func from _all_gadgets
+        if name in all_gadgets[gadget_type]:
+            return all_gadgets[gadget_type][name]
+        
+        return None
 
     #NOTE: child classes should extend these for converters to use the raw data properly
 
@@ -353,8 +365,20 @@ class ConverterBase(ModelBase):
     #we must make applies default due to how dataclasses work, so assert here just to make sure
     def __post_init__(self):
         super().__post_init__()
+
+        #XXX for now we dont support dummy converters - no idea how that would be useful but it might be in the future
+        assert not self.dummy, "dummy converters not supported"
+        
         #XXX this introduces more dependencies on global namespace but whatever finding gadget given anme also uses that
-        self.applies = registered_converters[self.func.__name__]
+        self.applies = registered_converters[self.func]
+
+    def _lookup_name(self, name):        
+        #fetch func from registered_converters
+        for func in registered_converters:
+            if func.__name__ == name:
+                return func
+        
+        return None
 
     #attempts to convert some raw data using this converter
     #NOTE: raw data since we dont want to change the gadget itself at this stage,
@@ -386,22 +410,22 @@ class PythonGadget(GadgetBase):
     inline: bool = _field(init=False, repr=False, default=False)
 
     #create a dummy gadget that returns a commented out func def
-    @classmethod
-    def create_dummy_gadget(cls, name: str):
+    def _make_dummy(self):
+        super()._make_dummy()
         #NOTE ast trees dont have a node for comments, but we can abuse Name nodes since there are no validity checking
         #NOTE need to wrap in Expr so its in a new line
-        gadget = super().create_dummy_gadget(name)
-        gadget.func_ast = _ast.Module([_ast.Expr(_ast.Name(f'#def {name}(*args, **kwargs): pass  #TODO provided'))], [])
-        gadget.orig_ast = _copy.deepcopy(gadget.func_ast)
-        return gadget
+        self.func_ast = _ast.Module([_ast.Expr(_ast.Name(f'#def {self.name}(*args, **kwargs): pass  #TODO provided'))], [])
+        self.chain_ast = self.func_ast
+        self.orig_ast = _copy.deepcopy(self.func_ast)
 
 
     #override: also initialize func_ast for this gadget
     def __post_init__(self):
         super().__post_init__()
-        self.func_ast = _ast.parse(_inspect.getsource(self.func).strip())  #strip to accomodate for nested function sources (e.g. the one at create_dummy_gadget)
-        self.orig_ast = _copy.deepcopy(self.func_ast)
-        self.chain_ast = _ast.Module([], []) if not self.inline else self.func_ast #empty container if not inline else same ref as func_ast coz the chain directly modifies the func_ast
+        if not self.dummy:
+            self.func_ast = _ast.parse(_inspect.getsource(self.func).strip())  #strip to accomodate for nested function sources (e.g. the one at create_dummy_gadget)
+            self.orig_ast = _copy.deepcopy(self.func_ast)
+            self.chain_ast = _ast.Module([], []) if not self.inline else self.func_ast #empty container if not inline else same ref as func_ast coz the chain directly modifies the func_ast
 
     #this should run when we are prepping the raw gadget for chaining - it would add the required assigns/renaming for the gadget to be used by other gadgets
     def _ready_gadget_for_use(self, ast: _ast.Module) -> _ast.Module:        
