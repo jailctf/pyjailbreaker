@@ -390,18 +390,23 @@ class PythonGadget(GadgetBase):
         params = _inspect.getfullargspec(self.func).args
         _, name = self._get_gadget_names_from_ast(self.func_ast)
         #use _put_code_into_func_body instead of _ready_gadget_for_use here since the former also does simple inlining cases
-        full_ast = self._put_code_into_func_body(_ast.Module([], []), self.get_full_ast())
-        chain_src = _ast.unparse(full_ast) + '\n'
-        #just dont add the call at all if theres no params - we no longer need that reference
-        if params:
-            chain_src += f'{name}({", ".join(args)})'
+        full_ast = self.get_full_ast()
 
-            #simple inline case is already handled by _ready_gadget_for_use, only match on complex case
-            if self.inline and isinstance(full_ast.body[0], _ast.FunctionDef):
-                #try one last inlining with the user given params
-                return _ast.unparse(Inliner(full_ast.body[0].name, full_ast.body[0]).visit(_ast.parse(chain_src))) + '\n'
+        #for complex inline cases, we need to add a reference before we put code into func body and trigger inliner so the code is generated correctly
+        #without a reference, inliner will assume the function is never used and return an empty gadget
+        if params and self.inline:
+            #if there are params, add the user data into it and grab the ast back for putting code into func body
+            chain_src = _ast.unparse(full_ast) + f'\n{name}({", ".join(args)})'
+            full_ast = _ast.parse(chain_src)
+
+        #_put_code_into_func_body deals with cleaning up the function via _ready_gadget_for_use, and handles both simple and complex inlining cases if needed
+        src = _ast.unparse(self._put_code_into_func_body(_ast.Module([], []), full_ast))
+
+        #for non inline cases only (simple inline cases does not have params), we can add it to the src directly after
+        if params and not self.inline:
+            src += f'\n{name}({", ".join(args)})'
         
-        return chain_src + '\n'
+        return src + '\n'
 
     
     #override: also put code into our func_ast
