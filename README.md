@@ -104,6 +104,29 @@ Outside of the exploit chain generator, if a specific gadget is required either 
 
 A user is also able to provide their own gadgets through providing their own python function that conforms to the gadget spec via `jailbreak.register_user_gadget(<gadget function object>, <gadget type (aka the directory names in gadgets/, e.g. "python")>)`.
 
+### Model specification
+
+Aside from the aforementioned submodules in the [Repository layout](README.md#repository-layout) section, there is also one submodule specifically made for payload generation.
+The [models](jailbreak/models.py) submodule is a file that stores all the code specific to gadget types within their own classes - the traverser utilizes this to determine how to generate the payload and how violations are handled.
+
+The models have the following function interfaces:
+
+> Common (available on both gadget and converter interfaces):
+>  - add_dependency - tracks the dependency, and performs necessary modifications to the raw payload of the gadget to include the dependency
+>  - create_dummy_gadget - creates a gadget with a raw payload specifying it's a dummy
+>  - `__repr__` - prints the gadget specification as a string, could be used to hardcode / manually modify a gadget chain
+> 
+> Gadgets:
+>  - `__call__` - calling the gadget instance itself will generate a full payload chain with all the dependencies applied
+>  - extract - **copies** and extracts the raw payload for converters to run on
+>  - apply_converters - tracks the converters to be applied, and applies the converted payload as the new raw payload of the gadget 
+> 
+> Converters:
+>  - convert - applies the converter to the raw payload extracted from the gadget 
+
+The above models are open to end users for manually creating or editing gadget chains, but end users should not need to modify this submodule.
+See [example.py](example.py) for example end user usages of the models.
+
 ### Example
 To generate a similar chain to the one in the [Background](README.md#background) section, one can simply do:
 ```py
