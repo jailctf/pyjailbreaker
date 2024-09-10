@@ -196,6 +196,7 @@ class ModelBase:
     name: str = _field(init=False)
     #all dependencies of a gadget of subclass should have dependencies of also the same subclass
     dependencies: 'list[GadgetBase]' = _field(default_factory=list)
+    dummy: bool = _field(default=False, init=False)
     #TODO some mechanism to track failed gadget chains for giving partial suggestions
 
     #TODO run add_dependency (and similar funcs, eg apply_converters) on post init so the raw data is properly converted
@@ -205,6 +206,8 @@ class ModelBase:
     def create_dummy_gadget(cls, name: str):
         def dummy(): pass
         gadget = cls(dummy)
+        gadget.name = name
+        gadget.dummy = True
         return gadget
 
     def __post_init__(self):
@@ -277,7 +280,8 @@ class PythonGadget(GadgetBase):
     func_ast: _ast.AST = _field(init=False, repr=False)
     #dependency chain ast, to be merged in at the end
     chain_ast: _ast.AST = _field(init=False, repr=False)
-    inline: bool = False
+    #setting this field should be done by specifying the class instead, hence init=False and repr=False
+    inline: bool = _field(init=False, repr=False, default=False)
 
     #create a dummy gadget that returns a commented out func def
     @classmethod
@@ -285,7 +289,7 @@ class PythonGadget(GadgetBase):
         #NOTE ast trees dont have a node for comments, but we can abuse Name nodes since there are no validity checking
         #NOTE need to wrap in Expr so its in a new line
         gadget = super().create_dummy_gadget(name)
-        gadget.func_ast = _ast.Module([_ast.Expr(_ast.Name(f'#def {name}(*args, **kwargs): pass  #TODO provided'))])
+        gadget.func_ast = _ast.Module([_ast.Expr(_ast.Name(f'#def {name}(*args, **kwargs): pass  #TODO provided'))], [])
         gadget.orig_ast = _copy.deepcopy(gadget.func_ast)
         return gadget
 
@@ -387,6 +391,9 @@ class PythonGadget(GadgetBase):
 
     #terminator call (i.e. the user facing part), get the whole src of the gadget
     def __call__(self, *args):
+        if self.dummy:  #no need to process much, just grab the ast
+            return _ast.unparse(self.func_ast) + '\n'
+
         params = _inspect.getfullargspec(self.func).args
         _, name = self._get_gadget_names_from_ast(self.func_ast)
         #use _put_code_into_func_body instead of _ready_gadget_for_use here since the former also does simple inlining cases
@@ -436,7 +443,7 @@ class PythonGadget(GadgetBase):
 #convenience class for creating inline python gadgets without declaring it every time
 @_dataclass(eq=False)
 class PythonGadgetInline(PythonGadget):
-    inline: bool = _field(init=False)
+    inline: bool = _field(init=False, repr=False, default=True)
     #override: force inline = True
     def __post_init__(self):
         self.inline = True
