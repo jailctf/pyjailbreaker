@@ -10,7 +10,7 @@ def chr__fmt_str(n):
     return f'{n:c}'
 
 def chr__format(n):
-    '{:c}'.format(n)
+    return '{:c}'.format(n)
 
 def chr__builtins(n, *, builtins_dict):
     return builtins_dict['chr'](n)

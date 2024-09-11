@@ -6,7 +6,7 @@ def str__type(*, type):
     return type('')
 
 def str__dunder_class():
-    ''.__class__
+    return ''.__class__
 
 def str__bytes(*, type, bytes):
     return type(bytes().decode())
