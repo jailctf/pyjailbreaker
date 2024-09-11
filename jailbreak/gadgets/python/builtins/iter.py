@@ -11,3 +11,6 @@ def iter__attrerror(seq):
         g.send(1)
     except Exception as e:
         return e.obj
+    
+def iter__builtins(seq, *, builtins_dict):
+    return builtins_dict['iter'](seq)
