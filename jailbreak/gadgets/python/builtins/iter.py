@@ -2,7 +2,7 @@
 Gadgets that work the same as the builtin function `iter`.
 """
 
-def iter__attrerror(seq):
+def iter__attrerror(seq, *, Exception):
     try:
         def hm():
             yield from seq

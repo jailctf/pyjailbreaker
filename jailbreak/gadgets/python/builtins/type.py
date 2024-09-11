@@ -2,7 +2,6 @@
 Gadgets for obtaining the `type` type.
 """
 
-
 def type__class():
     return [].__class__.__class__
 
