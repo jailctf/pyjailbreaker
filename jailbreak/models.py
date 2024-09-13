@@ -148,10 +148,24 @@ class ApplyConverter(_ast.NodeTransformer):
         self.applies = applies
         #change the converter so that the gadgets in kwonlyargs are not required to call the func
         self.converter = _FunctionType(converter.__code__.replace(co_kwonlyargcount=0), converter.__globals__)
-    
+
+        #for giving a full node path from top level to current node into converters, for checking conditions like "do not convert format_spec constants into calls"
+        self.curr_path = [] 
+
+    def visit(self, node: _ast.AST) -> _ast.AST:
+        #track the node
+        self.curr_path.append(node)
+
+        #actually visit the node
+        ret = super().visit(node)
+
+        #remove the node from path now that we are done with it; last item should be itself
+        assert node == self.curr_path.pop()
+        return ret
+
     def generic_visit(self, node: _ast.AST) -> _ast.AST:
         if type(node) in self.applies:
-            node = _ast.fix_missing_locations(self.converter(node))
+            node = _ast.fix_missing_locations(self.converter(self.curr_path))
         
         #otherwise return itself
         return super().generic_visit(node)

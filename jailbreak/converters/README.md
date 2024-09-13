@@ -1,5 +1,7 @@
 ## Converters
 
+> NOTE: This README currently only documents Python converters, but groundwork has been laid to allow converters for all gadget types (e.g. bytecode, pickle) - when support for those are added, this README will be updated.
+
 These are converters that converts gadgets into variants if there are gadgets that can perform the operations needed.
 
 On a gadget chain's creation, if a gadget doesn't match, it will be converted into possible variants before the gadget traversal continues.
@@ -8,7 +10,7 @@ The format is as follows:
 
 ```py
 @register_converter(<ast node type that this applies to>, ..., ast=[<list of nodes that this converter hides>], char=[<list of chars that this converter hides>], ...)
-def <converter name>__<variant>(<ast node to be converted>, *, <required gadget>, ...):
+def <converter name>__<variant>(<path from the top level ast node to the current node to be converted>, *, <required gadget>, ...):
     return <transformed ast, with gadget encoded in ast format>
 ```
 
