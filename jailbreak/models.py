@@ -394,7 +394,7 @@ class GadgetBase(ModelBase):
         if not data:
             data = self.extract()
             for converter in converters:
-                data = converter.convert(data)
+                data = converter.convert(data, self)
         self.converters += converters
         return data
 
@@ -426,9 +426,10 @@ class ConverterBase(ModelBase):
         return None
 
     #attempts to convert some raw data using this converter
-    #NOTE: raw data since we dont want to change the gadget itself at this stage,
+    #gadget is passed in so any necessary pre/post processing specific to the gadget type could be done
+    #NOTE: raw, COPIED data since we dont want to change the gadget itself at this stage,
     #      we are just testing and the data could be discarded
-    def convert(self, data):
+    def convert(self, data, gadget: 'GadgetBase'):
         pass
 
 
@@ -436,7 +437,9 @@ class ConverterBase(ModelBase):
 #documents a python converter
 @_dataclass(eq=False)
 class PythonConverter(ConverterBase):
-    def convert(self, data: _ast.AST):
+    def convert(self, data: _ast.AST, gadget: 'PythonGadget'):
+        #clean docstrings off data first to avoid unnecessary conversions / false positives (since the docstrings will no longer match the one in orig_ast)
+        gadget.remove_docstring(data)
         return ApplyConverter(self.func, self.applies).visit(data)
 
 
@@ -529,6 +532,18 @@ class PythonGadget(GadgetBase):
             
         return _ast.fix_missing_locations(func_ast)
 
+    #NOTE: modifies ast
+    def remove_docstring(self, ast):
+        #remove gadget docstrings if any (ref: ast.get_docstring)
+        #body of the functiondef, should at least have one element or else its an invalid function anyway
+        first_func_body_node = self.orig_ast.body[0].body[0]  #NOTE: use orig_ast since func_ast couldve been modified by this time
+        if isinstance(first_func_body_node, _ast.Expr) and isinstance(first_func_body_node.value, _ast.Constant) and isinstance(first_func_body_node.value.value, str): 
+            #find the equivalent docstring in ast and remove it
+            for stmt in ast.body[0].body:
+                if isinstance(stmt, _ast.Expr) and isinstance(stmt.value, _ast.Constant) and isinstance(stmt.value.value, str) and stmt.value.value == first_func_body_node.value.value:
+                    ast.body[0].body.remove(stmt)
+                    break
+
     #merges the func ast and the chain ast together
     #this also removes some gadget metadata thats for internal use, so is functionally similar to _ready_gadget_for_use, except this gives a raw function gadget
     def get_full_ast(self) -> _ast.Module:
@@ -545,16 +560,7 @@ class PythonGadget(GadgetBase):
             full_ast.body[0].args.kwonlyargs = []
             full_ast.body[0].args.kw_defaults = []  #must match kwonlyargs
 
-            #remove gadget docstrings if any (ref: ast.get_docstring)
-            #body of the functiondef, should at least have one element or else its an invalid function anyway
-            first_func_body_node = self.orig_ast.body[0].body[0]  #NOTE: use orig_ast since func_ast couldve been modified by this time
-            if isinstance(first_func_body_node, _ast.Expr) and isinstance(first_func_body_node.value, _ast.Constant) and isinstance(first_func_body_node.value.value, str): 
-                #find the equivalent docstring in full_ast and remove it
-                for stmt in full_ast.body[0].body:
-                   if isinstance(stmt, _ast.Expr) and isinstance(stmt.value, _ast.Constant) and isinstance(stmt.value.value, str) and stmt.value.value == first_func_body_node.value.value:
-                       full_ast.body[0].body.remove(stmt)
-                       break
-                       
+            self.remove_docstring(full_ast)
 
         #if we are inlining func_ast == chain_ast anyways due to how the chain modifies func_ast directly so dont put code in
         if not self.inline:

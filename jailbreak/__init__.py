@@ -105,13 +105,13 @@ _count_violations_mapping = {
     'python': _count_violations_python,
 }
 
-def _choose_converter_for_violation(type: str, violation, gadget: str, all_gadgets: 'dict[str, _FunctionType]', seen: 'list[str]', converter_class: 'type[models.ConverterBase]', gadget_type: str) -> 'models.ConverterBase | None':
+def _choose_converter_for_violation(type: str, violation, gadget: 'models.GadgetBase', all_gadgets: 'dict[str, _FunctionType]', seen: 'list[str]', converter_class: 'type[models.ConverterBase]', gadget_type: str) -> 'models.ConverterBase | None':
     #choose first one that would succeed under our jail (there is no point in trying other converters if this one succeeds, assuming the kwargs annotations via @register_converter accurately depicts what the converter does)
     for converter_func in _applicable_converters[type][violation]:
         converter = converter_class(converter_func)
         converter_required_gadgets = _inspect.getfullargspec(converter_func).kwonlyargs
         for next_gadget in converter_required_gadgets:
-            gadget = _try_gadget(next_gadget, all_gadgets, seen + [gadget], gadget_type)
+            gadget = _try_gadget(next_gadget, all_gadgets, seen + [gadget.name], gadget_type)
             if not gadget:
                 continue  #not all dependencies can be resolved, next converter
             converter.add_dependency(gadget)  #we can add dependencies on the fly since if the converter is bad we throw it away anyway
@@ -129,7 +129,7 @@ def _try_convert(gadget: models.GadgetBase, required_gadgets: 'list[_FunctionTyp
         
         for violation in type_violations:
             if violation in _applicable_converters[type] and _applicable_converters[type][violation]:
-                converter = _choose_converter_for_violation(type, violation, gadget.name, all_gadgets, seen, converter_class, gadget_type)
+                converter = _choose_converter_for_violation(type, violation, gadget, all_gadgets, seen, converter_class, gadget_type)
                 if not converter:
                     return False #we exhausted all the applicable converters for this violation, give up on this chain
                 
@@ -144,7 +144,7 @@ def _try_convert(gadget: models.GadgetBase, required_gadgets: 'list[_FunctionTyp
         #all converters in apply should be the same type, choose a random one to extract stuff and apply with
         new_data = gadget.extract()
         for converter in apply:
-            new_data = converter.convert(new_data)
+            new_data = converter.convert(new_data, gadget)
         #XXX we are assuming converters do not introduce new regressions, otherwise we will have to rerun the whole conversion test again when we see violations
         if not _count_violations_mapping[gadget_type](new_data, required_gadgets):
             #add the required gadget chain(s) into the returned chain along with the transformed func
