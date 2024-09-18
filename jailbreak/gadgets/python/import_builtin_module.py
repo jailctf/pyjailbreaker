@@ -25,3 +25,6 @@ def import_builtin_module__imp_func(mod, *, sys):
 def import_builtin_module__imp_mod(mod, *, sys):
     sys.name = mod
     return sys.modules['_imp'].create_builtin(sys)
+
+def import_builtin_module__loader(mod, *, sys):
+    return sys.__loader__.load_module(mod)
