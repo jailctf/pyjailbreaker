@@ -11,6 +11,8 @@ def builtins_dict__gi_builtins():
     g = (g.gi_frame.f_back for x in [1])
     return [x for x in g][0].f_back.f_back.f_builtins
 
-def builtins_dict__self():
-    # builtin func.__self__
-    return chr.__self__
+"""
+def builtins_dict__self(*, fn):
+    # builtin func.__self__, so can be like chr
+    return fn.__self__
+""" # need to figure out how to properly encode this...
