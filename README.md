@@ -44,6 +44,10 @@ Which is a simple rewrite of the strings to use `chr` on each of the character's
 
 By breaking down pyjail payloads into these components, we can document every payload as manageable, single-purpose chunks - with enough documented payloads, the chunks could be mix-and-matched to form new payloads that could bypass a different set of restrictions than the original payloads could.
 
+Note, there are times where a converter can accomplish the same thing as a gadget. Take, for example, extracting dictionary keys using a function, this should be written as a converter as the key has to be specified/templated into the function, despite achieving a similar goal as many gadgets.
+
+
+
 
 ### Repository layout
 The repository structure can be described with the following components:
