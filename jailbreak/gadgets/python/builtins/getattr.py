@@ -2,6 +2,14 @@
 Gadgets that work the same as the builtin function `getattr`.
 """
 
+"""
+NOTE:
+```
+class new(object):0 
+print(new().__dict__)
+```
+Will return {}. .__dict__ simply returns the difference on mro. So, getattr__vars and getattr__dict should be used carefully
+"""
 def getattr__vars(obj, attr, *, vars):
     return vars(obj)[attr]
 
