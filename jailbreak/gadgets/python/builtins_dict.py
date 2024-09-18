@@ -10,3 +10,7 @@ def builtins_dict__wrap_close(*, list_classes, str):
 def builtins_dict__gi_builtins():
     g = (g.gi_frame.f_back for x in [1])
     return [x for x in g][0].f_back.f_back.f_builtins
+
+def builtins_dict__self():
+    # builtin func.__self__
+    return chr.__self__
